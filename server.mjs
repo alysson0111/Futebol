@@ -12,7 +12,9 @@ loadLocalEnv(".env.local");
 
 const port = Number(process.env.PORT || 4173);
 const apiFootballKey = process.env.API_FOOTBALL_KEY || process.env.APISPORTS_KEY || "";
-const historyFile = join(root, "data", "prediction-history.json");
+const historyFile = process.env.VERCEL
+  ? join("/tmp", "prediction-history.json")
+  : join(root, "data", "prediction-history.json");
 const firebaseConfig = {
   projectId: process.env.FIREBASE_PROJECT_ID || "",
   clientEmail: process.env.FIREBASE_CLIENT_EMAIL || "",
@@ -1138,15 +1140,18 @@ async function serveStatic(req, res, url) {
   }
 }
 
-const server = http.createServer(async (req, res) => {
+export default async function handler(req, res) {
   const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
   if (url.pathname.startsWith("/api/")) {
     await handleApi(req, res, url);
     return;
   }
   await serveStatic(req, res, url);
-});
+}
 
-server.listen(port, "127.0.0.1", () => {
-  console.log(`Sistema de analise rodando em http://127.0.0.1:${port}`);
-});
+if (!process.env.VERCEL) {
+  const server = http.createServer(handler);
+  server.listen(port, "127.0.0.1", () => {
+    console.log(`Sistema de analise rodando em http://127.0.0.1:${port}`);
+  });
+}
