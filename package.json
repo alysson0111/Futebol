@@ -1,0 +1,12 @@
+{
+  "name": "analise-jogos-sofascore",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "firebase-admin": "^14.0.0"
+  }
+}

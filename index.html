@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Análise de Jogos IA</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <section class="topbar">
+        <div class="brand-block">
+          <div class="brand-mark">AV</div>
+          <div>
+            <p class="eyebrow">API-Football + IA preditiva</p>
+            <h1>Análise de Jogos</h1>
+          </div>
+        </div>
+        <div class="top-links" aria-label="Atalhos">
+          <span>Apostas esportivas</span>
+          <span>Ao vivo</span>
+          <span>Previsões</span>
+          <span>Campeonatos</span>
+        </div>
+        <div class="status-pill" id="sourceStatus">Conectando</div>
+      </section>
+
+      <section class="controls">
+        <label>
+          Data
+          <input id="dateInput" type="date">
+        </label>
+        <label>
+          Esporte
+          <select id="sportInput">
+            <option value="football">Futebol</option>
+            <option value="basketball">Basquete</option>
+            <option value="tennis">Tênis</option>
+            <option value="volleyball">Vôlei</option>
+          </select>
+        </label>
+        <label>
+          Buscar
+          <input id="searchInput" type="search" placeholder="Time, liga ou país">
+        </label>
+        <label>
+          Campeonato
+          <select id="leagueFilter">
+            <option value="">Todos os campeonatos</option>
+          </select>
+        </label>
+        <button id="startedToggle" class="secondary-button" type="button" aria-pressed="false">Ao vivo agora</button>
+        <button id="topPredictionsButton" class="secondary-button highlight-button" type="button">Top 10 IA do dia</button>
+        <button id="matchGoalButton" class="secondary-button goal-alert-button" type="button">Partida +0.5 gol</button>
+        <label class="compact-label">
+          Resultados
+          <select id="resultsType">
+            <option value="top10">Top 10 IA</option>
+            <option value="match-goal">Partida +0.5 gol</option>
+          </select>
+        </label>
+        <button id="resultsButton" class="secondary-button" type="button">Ver acertos</button>
+        <button id="loadButton" type="button">Atualizar jogos</button>
+      </section>
+      <p id="sourceMessage" class="source-message hidden"></p>
+
+      <section class="workspace">
+        <aside class="match-list">
+          <div class="section-title">
+            <h2>Jogos</h2>
+            <span id="matchCount">0</span>
+          </div>
+          <div id="matches"></div>
+        </aside>
+
+        <section class="analysis-panel">
+          <div id="emptyState" class="empty-state">
+            <h2>Selecione um confronto</h2>
+            <p>Escolha um confronto ou gere as 10 melhores previsões da data selecionada.</p>
+          </div>
+
+          <div id="topPredictions" class="top-predictions hidden"></div>
+
+          <div id="analysisState" class="hidden">
+            <div class="fixture-head">
+              <div>
+                <p id="leagueName" class="eyebrow"></p>
+                <h2 id="fixtureTitle"></h2>
+                <p id="fixtureMeta"></p>
+              </div>
+              <button id="predictButton" type="button">Gerar previsão</button>
+            </div>
+
+            <div class="inputs-grid">
+              <label>Forma mandante <input id="formHome" type="number" min="0" max="100" placeholder="auto"></label>
+              <label>Forma visitante <input id="formAway" type="number" min="0" max="100" placeholder="auto"></label>
+              <label>Ataque mandante <input id="attackHome" type="number" min="0" max="100" placeholder="auto"></label>
+              <label>Ataque visitante <input id="attackAway" type="number" min="0" max="100" placeholder="auto"></label>
+              <label>Defesa mandante <input id="defenseHome" type="number" min="0" max="100" placeholder="auto"></label>
+              <label>Defesa visitante <input id="defenseAway" type="number" min="0" max="100" placeholder="auto"></label>
+              <label>Desfalques mandante <input id="absencesHome" type="number" min="0" max="12" value="0"></label>
+              <label>Desfalques visitante <input id="absencesAway" type="number" min="0" max="12" value="0"></label>
+            </div>
+
+            <div id="prediction" class="prediction hidden"></div>
+          </div>
+        </section>
+      </section>
+    </main>
+    <script src="./app.js" type="module"></script>
+  </body>
+</html>
