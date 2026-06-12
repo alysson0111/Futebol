@@ -143,6 +143,39 @@ async function saveSignalsToFirebase(records) {
   }
 }
 
+async function readSignalsFromFirebase(date) {
+  const database = getFirebaseDatabase();
+  if (!database) return [];
+
+  try {
+    const snapshot = await database.collection("signals").where("date", "==", date).get();
+    firebaseStatus = "conectado";
+    return snapshot.docs.map(document => document.data());
+  } catch (error) {
+    firebaseStatus = `erro: ${error.message}`;
+    console.error("Falha ao consultar sinais no Firebase:", error.message);
+    return [];
+  }
+}
+
+async function readSignals(date, type = "") {
+  const history = await readHistory();
+  const localRecords = history.records.filter(record => record.date === date);
+  const firebaseRecords = await readSignalsFromFirebase(date);
+  const byId = new Map(localRecords.map(record => [record.id, record]));
+
+  for (const record of firebaseRecords) {
+    byId.set(record.id, { ...byId.get(record.id), ...record });
+  }
+
+  return [...byId.values()]
+    .filter(record => !type || record.type === type)
+    .sort((a, b) => {
+      const typeDiff = String(a.type).localeCompare(String(b.type));
+      return typeDiff || (a.rank || 999) - (b.rank || 999);
+    });
+}
+
 async function recordPredictions(type, date, source, items) {
   const history = await readHistory();
   const now = new Date().toISOString();
@@ -781,6 +814,17 @@ function accuracySummary(results) {
   };
 }
 
+function reportSummary(results) {
+  const types = ["top10", "match-goal", "favorite-goal"];
+  return {
+    ...accuracySummary(results),
+    byType: Object.fromEntries(types.map(type => [
+      type,
+      accuracySummary(results.filter(item => item.record.type === type))
+    ]))
+  };
+}
+
 async function fetchSofascoreEvents(date, sport) {
   const url = `https://api.sofascore.com/api/v1/sport/${encodeURIComponent(sport)}/scheduled-events/${encodeURIComponent(date)}`;
   const response = await fetch(url, {
@@ -1058,10 +1102,7 @@ async function handleApi(req, res, url) {
     const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
     const type = url.searchParams.get("type") || "top10";
     const sport = url.searchParams.get("sport") || "football";
-    const history = await readHistory();
-    const records = history.records
-      .filter(record => record.date === date && record.type === type)
-      .sort((a, b) => (a.rank || 999) - (b.rank || 999));
+    const records = await readSignals(date, type);
 
     try {
       const events = await fetchApiFootballEvents(date, sport);
@@ -1096,6 +1137,53 @@ async function handleApi(req, res, url) {
         type,
         warning: `${error.message}. Mostrando apenas o histórico salvo.`,
         summary: accuracySummary(results),
+        results
+      });
+    }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/signals-report") {
+    const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
+    const sport = url.searchParams.get("sport") || "football";
+    const records = await readSignals(date);
+
+    try {
+      const events = await fetchApiFootballEvents(date, sport);
+      const eventsById = new Map(events.map(event => [String(event.id), event]));
+      const results = records.map(record => {
+        const currentEvent = eventsById.get(String(record.event.id)) || record.event;
+        const storedResult = record.result;
+        const result = isFinishedEvent(currentEvent)
+          ? evaluateRecord(record, currentEvent)
+          : storedResult || evaluateRecord(record, currentEvent);
+        return { record, event: currentEvent, result };
+      });
+      await saveEvaluatedResults(results);
+
+      json(res, 200, {
+        source: "firebase",
+        date,
+        summary: reportSummary(results),
+        results
+      });
+    } catch (error) {
+      const results = records.map(record => ({
+        record,
+        event: record.event,
+        result: record.result || {
+          status: "pending",
+          hit: null,
+          score: "pendente",
+          detail: "Aguardando atualização do jogo."
+        }
+      }));
+
+      json(res, 200, {
+        source: firebaseConfig.projectId ? "firebase" : "historico-local",
+        date,
+        warning: `${error.message}. Exibindo os dados já salvos no banco.`,
+        summary: reportSummary(results),
         results
       });
     }

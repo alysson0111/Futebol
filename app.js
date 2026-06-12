@@ -15,6 +15,7 @@ const els = {
   matchGoalButton: document.querySelector("#matchGoalButton"),
   resultsType: document.querySelector("#resultsType"),
   resultsButton: document.querySelector("#resultsButton"),
+  reportButton: document.querySelector("#reportButton"),
   loadButton: document.querySelector("#loadButton"),
   sourceStatus: document.querySelector("#sourceStatus"),
   sourceMessage: document.querySelector("#sourceMessage"),
@@ -573,6 +574,101 @@ function renderPredictionResults(payload) {
   });
 }
 
+function typeLabel(type) {
+  if (type === "match-goal") return "Partida +0.5 gol";
+  if (type === "favorite-goal") return "Favorito +0.5 gol";
+  return "Top 10 IA";
+}
+
+function renderSignalsReport(payload) {
+  const summary = payload.summary || {};
+  const byType = summary.byType || {};
+  const dateLabel = new Intl.DateTimeFormat("pt-BR").format(new Date(`${payload.date}T12:00:00`));
+
+  els.analysisState.classList.add("hidden");
+  els.emptyState.classList.add("hidden");
+  els.topPredictions.classList.remove("hidden");
+  els.topPredictions.innerHTML = `
+    <div class="top-predictions-head results-head">
+      <div>
+        <p class="eyebrow">Histórico salvo no Firebase</p>
+        <h2>Relatório de ${dateLabel}</h2>
+      </div>
+      <span>${summary.accuracy || 0}%</span>
+    </div>
+    <div class="accuracy-grid">
+      <div><span>Sinais</span><b>${summary.total || 0}</b></div>
+      <div><span>Resolvidos</span><b>${summary.finished || 0}</b></div>
+      <div><span>Acertos</span><b>${summary.hits || 0}</b></div>
+      <div><span>Erros</span><b>${summary.misses || 0}</b></div>
+      <div><span>Pendentes</span><b>${summary.pending || 0}</b></div>
+    </div>
+    <div class="accuracy-grid report-types">
+      ${["top10", "match-goal", "favorite-goal"].map(type => {
+        const item = byType[type] || {};
+        return `<div><span>${typeLabel(type)}</span><b>${item.total || 0}</b><small>${item.accuracy || 0}% acerto</small></div>`;
+      }).join("")}
+    </div>
+    ${(payload.results || []).length ? `
+      <div class="prediction-ranking">
+        ${payload.results.map(item => {
+          const record = item.record;
+          const event = item.event;
+          const result = item.result;
+          const statusClass = result.status === "pending" ? "pending" : result.hit ? "hit" : "miss";
+          const statusText = result.status === "pending" ? "Pendente" : result.hit ? "Acertou" : "Errou";
+          const market = record.type === "top10"
+            ? record.prediction?.pick || "Previsão"
+            : record.alert?.label || typeLabel(record.type);
+          return `
+            <button class="ranking-card result-card ${statusClass}" type="button" data-record-id="${record.id}">
+              <span class="ranking-number">#${record.rank || "-"}</span>
+              <span class="ranking-main">
+                <strong>${event.homeTeam?.name || "Mandante"} x ${event.awayTeam?.name || "Visitante"}</strong>
+                <small>${typeLabel(record.type)} · ${event.tournament?.name || "Competição"}</small>
+                <em>${market}</em>
+                <small>${result.detail}</small>
+              </span>
+              <span class="ranking-score">
+                <b>${statusText}</b>
+                <small>Placar ${result.score}</small>
+              </span>
+              <span class="ranking-market">${record.alert?.fairOdd ? `Odd ${Number(record.alert.fairOdd).toFixed(2)}` : record.prediction?.expectedScore || ""}</span>
+            </button>
+          `;
+        }).join("")}
+      </div>
+    ` : `<p class="model-note">Nenhum sinal salvo para esta data.</p>`}
+  `;
+}
+
+async function showSignalsReport() {
+  els.reportButton.disabled = true;
+  els.reportButton.textContent = "Consultando";
+  els.sourceStatus.textContent = "Consultando Firebase";
+  try {
+    const params = new URLSearchParams({
+      date: els.dateInput.value,
+      sport: els.sportInput.value
+    });
+    const response = await fetch(`/api/signals-report?${params}`);
+    const payload = await response.json();
+    if (payload.warning) {
+      els.sourceMessage.textContent = payload.warning;
+      els.sourceMessage.classList.remove("hidden");
+    }
+    renderSignalsReport(payload);
+    els.sourceStatus.textContent = `${payload.summary?.total || 0} sinais salvos`;
+  } catch (error) {
+    els.sourceStatus.textContent = "Erro no relatório";
+    els.topPredictions.classList.remove("hidden");
+    els.topPredictions.innerHTML = `<p class="model-note">${error.message}</p>`;
+  } finally {
+    els.reportButton.disabled = false;
+    els.reportButton.textContent = "Relatório da data";
+  }
+}
+
 async function showPredictionResults() {
   els.resultsButton.disabled = true;
   els.resultsButton.textContent = "Conferindo";
@@ -755,6 +851,7 @@ els.sportInput.addEventListener("change", () => {
   els.matchGoalButton.disabled = !isFootball;
   els.resultsType.disabled = !isFootball;
   els.resultsButton.disabled = !isFootball;
+  els.reportButton.disabled = !isFootball;
 
   if (!isFootball) {
     state.liveOnly = false;
@@ -768,6 +865,7 @@ els.sportInput.addEventListener("change", () => {
 els.topPredictionsButton.addEventListener("click", generateTopPredictions);
 els.matchGoalButton.addEventListener("click", showMatchGoalAlerts);
 els.resultsButton.addEventListener("click", showPredictionResults);
+els.reportButton.addEventListener("click", showSignalsReport);
 els.searchInput.addEventListener("input", renderMatches);
 els.leagueFilter.addEventListener("change", renderMatches);
 els.startedToggle.addEventListener("click", () => {

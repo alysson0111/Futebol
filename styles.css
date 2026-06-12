@@ -527,6 +527,17 @@ select:focus {
   padding: 12px;
 }
 
+.report-types {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.report-types small {
+  color: var(--muted);
+  display: block;
+  font-size: 0.75rem;
+  margin-top: 4px;
+}
+
 .accuracy-grid span {
   color: var(--muted);
   display: block;
