@@ -320,7 +320,7 @@ function countryPtBr(country) {
 function isFinishedEvent(event) {
   const type = String(event.status?.type || "").toLowerCase();
   const description = String(event.status?.description || "").toLowerCase();
-  const finishedTypes = ["ft", "aet", "aot", "pen", "finished", "afterpen", "canc", "abd", "awd", "wo"];
+  const finishedTypes = ["ft", "aet", "pen", "finished", "afterpen", "canc", "abd", "awd", "wo"];
   return finishedTypes.includes(type)
     || description.includes("finished")
     || description.includes("match finished")
@@ -334,7 +334,7 @@ function isFinishedEvent(event) {
 function isLiveEvent(event) {
   const type = String(event.status?.type || "").toLowerCase();
   const elapsed = Number(event.status?.elapsed || 0);
-  return ["1h", "2h", "ht", "et", "p", "q1", "q2", "q3", "q4", "ot", "bt", "live", "inprogress"].includes(type)
+  return ["1h", "2h", "ht", "et", "p", "bt", "live", "inprogress"].includes(type)
     || elapsed > 0;
 }
 
@@ -374,47 +374,6 @@ function normalizeApiFootballFixture(item) {
     },
     venue: item.fixture?.venue ? { stadium: { name: item.fixture.venue.name, city: item.fixture.venue.city } } : null,
     source: "api-football"
-  };
-}
-
-function normalizeApiBasketballGame(item) {
-  return {
-    id: item.id,
-    sport: "basketball",
-    startTimestamp: item.timestamp || Math.floor(Date.parse(item.date || "") / 1000),
-    tournament: {
-      id: item.league?.id,
-      name: item.league?.name,
-      category: { name: countryPtBr(item.country?.name) },
-      season: item.league?.season,
-      type: item.league?.type,
-      logo: item.league?.logo
-    },
-    homeTeam: {
-      id: item.teams?.home?.id,
-      name: item.teams?.home?.name,
-      logo: item.teams?.home?.logo
-    },
-    awayTeam: {
-      id: item.teams?.away?.id,
-      name: item.teams?.away?.name,
-      logo: item.teams?.away?.logo
-    },
-    status: {
-      description: item.status?.long,
-      type: item.status?.short === "NS" ? "notstarted" : item.status?.short,
-      clock: item.status?.timer || null
-    },
-    score: {
-      home: item.scores?.home?.total,
-      away: item.scores?.away?.total,
-      quarters: {
-        home: item.scores?.home || null,
-        away: item.scores?.away || null
-      }
-    },
-    venue: null,
-    source: "api-basketball"
   };
 }
 
@@ -881,46 +840,6 @@ async function fetchApiFootballEvents(date, sport, options = {}) {
   return Array.isArray(payload.response) ? payload.response.map(normalizeApiFootballFixture).filter(event => event.id) : [];
 }
 
-async function fetchApiBasketballEvents(date) {
-  if (!apiFootballKey) {
-    throw new Error("Configure API_FOOTBALL_KEY para usar a API-Basketball gratuita");
-  }
-
-  const requestUrl = new URL("https://v1.basketball.api-sports.io/games");
-  requestUrl.searchParams.set("date", date);
-  requestUrl.searchParams.set("timezone", "America/Sao_Paulo");
-
-  const response = await fetch(requestUrl, {
-    headers: {
-      "accept": "application/json",
-      "x-apisports-key": apiFootballKey
-    }
-  });
-
-  if (!response.ok) {
-    throw new Error(`API-Basketball respondeu ${response.status}`);
-  }
-
-  const payload = await response.json();
-  if (Array.isArray(payload.errors) && payload.errors.length) {
-    throw new Error(`API-Basketball: ${payload.errors.join(", ")}`);
-  }
-  if (payload.errors && typeof payload.errors === "object" && Object.keys(payload.errors).length) {
-    throw new Error(`API-Basketball: ${Object.values(payload.errors).join(", ")}`);
-  }
-
-  return Array.isArray(payload.response)
-    ? payload.response.map(normalizeApiBasketballGame).filter(event => event.id)
-    : [];
-}
-
-async function fetchApiSportsEvents(date, sport, options = {}) {
-  if (sport === "basketball") {
-    return fetchApiBasketballEvents(date);
-  }
-  return fetchApiFootballEvents(date, sport, options);
-}
-
 async function handleApi(req, res, url) {
   if (req.method === "GET" && url.pathname === "/api/firebase-status") {
     json(res, 200, {
@@ -939,11 +858,8 @@ async function handleApi(req, res, url) {
     try {
       const events = provider === "sofascore"
         ? await fetchSofascoreEvents(date, sport)
-        : await fetchApiSportsEvents(date, sport, { liveOnly });
-      const source = provider === "sofascore"
-        ? provider
-        : sport === "basketball" ? "api-basketball" : "api-football";
-      json(res, 200, { source, date, sport, liveOnly, events });
+        : await fetchApiFootballEvents(date, sport, { liveOnly });
+      json(res, 200, { source: provider, date, sport, liveOnly, events });
     } catch (error) {
       json(res, 200, {
         source: "demo",

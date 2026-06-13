@@ -89,7 +89,7 @@ function isLive(event) {
   const type = String(event.status?.type || "").toLowerCase();
   const description = String(event.status?.description || "").toLowerCase();
   const elapsed = Number(event.status?.elapsed || 0);
-  const liveTypes = ["1h", "2h", "ht", "et", "p", "q1", "q2", "q3", "q4", "ot", "bt", "live", "inprogress"];
+  const liveTypes = ["1h", "2h", "ht", "et", "p", "bt", "live", "inprogress"];
   return liveTypes.includes(type)
     || elapsed > 0
     || description.includes("1st")
@@ -102,7 +102,7 @@ function isLive(event) {
 function isFinished(event) {
   const type = String(event.status?.type || "").toLowerCase();
   const description = String(event.status?.description || "").toLowerCase();
-  const finishedTypes = ["ft", "aet", "aot", "pen", "finished", "afterpen", "canc", "abd", "awd", "wo"];
+  const finishedTypes = ["ft", "aet", "pen", "finished", "afterpen", "canc", "abd", "awd", "wo"];
   return finishedTypes.includes(type)
     || description.includes("finished")
     || description.includes("match finished")
@@ -114,10 +114,6 @@ function isFinished(event) {
 }
 
 function statusLabel(event) {
-  const clock = String(event.status?.clock || "").trim();
-  if (isLive(event) && clock) {
-    return `${translateStatus(event.status?.type, event.status?.description || "Ao vivo")} · ${clock}`;
-  }
   const elapsed = Number(event.status?.elapsed || 0);
   if (isLive(event) && elapsed > 0) {
     return `${elapsed}' · Ao vivo`;
@@ -135,18 +131,12 @@ function translateStatus(type, description = "") {
     ns: "Não iniciado",
     "1h": "1º tempo",
     "2h": "2º tempo",
-    q1: "1º quarto",
-    q2: "2º quarto",
-    q3: "3º quarto",
-    q4: "4º quarto",
     ht: "Intervalo",
     bt: "Intervalo",
     et: "Prorrogação",
-    ot: "Prorrogação",
     p: "Pênaltis",
     ft: "Encerrado",
     aet: "Encerrado após prorrogação",
-    aot: "Encerrado após prorrogação",
     pen: "Encerrado nos pênaltis",
     pst: "Adiado",
     post: "Adiado",
@@ -795,7 +785,6 @@ async function loadEvents() {
     els.emptyState.classList.remove("hidden");
     const sourceLabels = {
       "api-football": "API-Football conectado",
-      "api-basketball": "API-Basketball conectada",
       sofascore: "SofaScore conectado",
       demo: "Modo demonstração"
     };
