@@ -170,6 +170,10 @@ async function readSignals(date, type = "") {
 
   return [...byId.values()]
     .filter(record => !type || record.type === type)
+    .map(record => ({
+      ...record,
+      sentMinute: record.sentMinute ?? record.alert?.minute ?? null
+    }))
     .sort((a, b) => {
       const typeDiff = String(a.type).localeCompare(String(b.type));
       return typeDiff || (a.rank || 999) - (b.rank || 999);
@@ -185,6 +189,7 @@ async function recordPredictions(type, date, source, items) {
     date,
     source,
     createdAt: now,
+    sentMinute: item.alert?.minute ?? null,
     rank: item.rank,
     event: item.event,
     prediction: item.prediction,
@@ -193,11 +198,17 @@ async function recordPredictions(type, date, source, items) {
 
   const byId = new Map(history.records.map(record => [record.id, record]));
   for (const record of incoming) {
-    byId.set(record.id, { ...byId.get(record.id), ...record });
+    const existing = byId.get(record.id);
+    byId.set(record.id, {
+      ...existing,
+      ...record,
+      createdAt: existing?.createdAt || record.createdAt,
+      sentMinute: existing?.sentMinute ?? existing?.alert?.minute ?? record.sentMinute
+    });
   }
   history.records = [...byId.values()].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
   await saveHistory(history);
-  await saveSignalsToFirebase(incoming);
+  await saveSignalsToFirebase(incoming.map(record => byId.get(record.id)));
 }
 
 async function saveEvaluatedResults(results) {
@@ -676,7 +687,7 @@ function predictedWinner(record) {
   return null;
 }
 
-function evaluateRecord(record, currentEvent) {
+function evaluateRecord(record, currentEvent, greenMinute = null) {
   const score = finalScore(currentEvent);
   const finished = isFinishedEvent(currentEvent);
   const scoreText = score ? `${score.home} x ${score.away}` : "pendente";
@@ -701,6 +712,7 @@ function evaluateRecord(record, currentEvent) {
         status: "finished",
         hit: true,
         score: scoreText,
+        greenMinute: record.result?.greenMinute ?? greenMinute,
         detail: "Saiu pelo menos mais um gol depois do alerta."
       };
     }
@@ -734,6 +746,7 @@ function evaluateRecord(record, currentEvent) {
       status: "finished",
       hit,
       score: scoreText,
+      greenMinute: hit ? "Encerramento" : null,
       detail: hit ? "Palpite principal acertou o resultado." : "Palpite principal não bateu com o resultado final."
     };
   }
@@ -838,6 +851,61 @@ async function fetchApiFootballEvents(date, sport, options = {}) {
   }
 
   return Array.isArray(payload.response) ? payload.response.map(normalizeApiFootballFixture).filter(event => event.id) : [];
+}
+
+async function fetchFixtureEvents(fixtureId) {
+  const requestUrl = new URL("https://v3.football.api-sports.io/fixtures/events");
+  requestUrl.searchParams.set("fixture", fixtureId);
+  const response = await fetch(requestUrl, {
+    headers: {
+      "accept": "application/json",
+      "x-apisports-key": apiFootballKey
+    }
+  });
+  if (!response.ok) throw new Error(`API-Football respondeu ${response.status}`);
+  const payload = await response.json();
+  if (payload.errors && Object.keys(payload.errors).length) {
+    throw new Error(`API-Football: ${Object.values(payload.errors).join(", ")}`);
+  }
+  return Array.isArray(payload.response) ? payload.response : [];
+}
+
+function greenMinuteFromEvents(record, fixtureEvents) {
+  const sentMinute = Number(record.sentMinute ?? record.alert?.minute ?? 0);
+  const goal = fixtureEvents
+    .filter(event => String(event.type || "").toLowerCase() === "goal")
+    .sort((a, b) => Number(a.time?.elapsed || 0) - Number(b.time?.elapsed || 0))
+    .find(event => Number(event.time?.elapsed || 0) >= sentMinute);
+  if (!goal) return null;
+  const elapsed = Number(goal.time?.elapsed || 0);
+  const extra = Number(goal.time?.extra || 0);
+  return extra > 0 ? `${elapsed}+${extra}` : elapsed;
+}
+
+async function evaluateRecords(records, eventsById) {
+  const fixtureEventsCache = new Map();
+  const results = [];
+
+  for (const record of records) {
+    const currentEvent = eventsById.get(String(record.event.id)) || record.event;
+    let result = evaluateRecord(record, currentEvent);
+    if (record.type === "match-goal" && result.hit && !result.greenMinute) {
+      try {
+        if (!fixtureEventsCache.has(String(record.event.id))) {
+          fixtureEventsCache.set(String(record.event.id), await fetchFixtureEvents(record.event.id));
+        }
+        result = {
+          ...result,
+          greenMinute: greenMinuteFromEvents(record, fixtureEventsCache.get(String(record.event.id)))
+        };
+      } catch {
+        result = { ...result, greenMinute: record.result?.greenMinute || null };
+      }
+    }
+    results.push({ record, event: currentEvent, result });
+  }
+
+  return results;
 }
 
 async function handleApi(req, res, url) {
@@ -1023,14 +1091,7 @@ async function handleApi(req, res, url) {
     try {
       const events = await fetchApiFootballEvents(date, sport);
       const eventsById = new Map(events.map(event => [String(event.id), event]));
-      const results = records.map(record => {
-        const currentEvent = eventsById.get(String(record.event.id)) || record.event;
-        return {
-          record,
-          event: currentEvent,
-          result: evaluateRecord(record, currentEvent)
-        };
-      });
+      const results = await evaluateRecords(records, eventsById);
       await saveEvaluatedResults(results);
 
       json(res, 200, {
@@ -1062,24 +1123,25 @@ async function handleApi(req, res, url) {
   if (req.method === "GET" && url.pathname === "/api/signals-report") {
     const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
     const sport = url.searchParams.get("sport") || "football";
-    const records = await readSignals(date);
+    const type = url.searchParams.get("type") || "";
+    const records = await readSignals(date, type);
 
     try {
       const events = await fetchApiFootballEvents(date, sport);
       const eventsById = new Map(events.map(event => [String(event.id), event]));
-      const results = records.map(record => {
-        const currentEvent = eventsById.get(String(record.event.id)) || record.event;
-        const storedResult = record.result;
-        const result = isFinishedEvent(currentEvent)
-          ? evaluateRecord(record, currentEvent)
-          : storedResult || evaluateRecord(record, currentEvent);
-        return { record, event: currentEvent, result };
-      });
+      const evaluatedResults = await evaluateRecords(records, eventsById);
+      const results = evaluatedResults.map(item => ({
+        ...item,
+        result: isFinishedEvent(item.event)
+          ? item.result
+          : item.record.result || item.result
+      }));
       await saveEvaluatedResults(results);
 
       json(res, 200, {
         source: "firebase",
         date,
+        type,
         summary: reportSummary(results),
         results
       });
@@ -1098,6 +1160,7 @@ async function handleApi(req, res, url) {
       json(res, 200, {
         source: firebaseConfig.projectId ? "firebase" : "historico-local",
         date,
+        type,
         warning: `${error.message}. Exibindo os dados já salvos no banco.`,
         summary: reportSummary(results),
         results

@@ -107,6 +107,31 @@
         </section>
       </section>
     </main>
+    <dialog id="reportDialog" class="report-dialog">
+      <form method="dialog" class="report-dialog-head">
+        <div>
+          <p class="eyebrow">Relatórios salvos</p>
+          <h2>Consultar sinais</h2>
+        </div>
+        <button class="dialog-close" type="submit" aria-label="Fechar">×</button>
+      </form>
+      <div class="report-dialog-fields">
+        <label>
+          Data do relatório
+          <input id="reportDateInput" type="date">
+        </label>
+        <label>
+          Tipo de sinal
+          <select id="reportTypeInput">
+            <option value="top10">Top 10 IA</option>
+            <option value="match-goal">Partida +0.5 gol</option>
+          </select>
+        </label>
+      </div>
+      <div class="report-dialog-actions">
+        <button id="consultReportButton" type="button">Consultar relatório</button>
+      </div>
+    </dialog>
     <script src="./app.js" type="module"></script>
   </body>
 </html>

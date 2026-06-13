@@ -2,7 +2,8 @@ const state = {
   events: [],
   selected: null,
   liveOnly: true,
-  matchGoalAlerts: []
+  matchGoalAlerts: [],
+  reportPayload: null
 };
 
 const els = {
@@ -16,6 +17,10 @@ const els = {
   resultsType: document.querySelector("#resultsType"),
   resultsButton: document.querySelector("#resultsButton"),
   reportButton: document.querySelector("#reportButton"),
+  reportDialog: document.querySelector("#reportDialog"),
+  reportDateInput: document.querySelector("#reportDateInput"),
+  reportTypeInput: document.querySelector("#reportTypeInput"),
+  consultReportButton: document.querySelector("#consultReportButton"),
   loadButton: document.querySelector("#loadButton"),
   sourceStatus: document.querySelector("#sourceStatus"),
   sourceMessage: document.querySelector("#sourceMessage"),
@@ -542,6 +547,7 @@ function renderPredictionResults(payload) {
                 <strong>${event.homeTeam?.name || "Mandante"} x ${event.awayTeam?.name || "Visitante"}</strong>
                 <small>${event.tournament?.name || "Competição"} · Placar ${result.score}</small>
                 <em>${market}</em>
+                <small>${signalSentText(record)}${result.hit ? ` · ${greenMomentText(record, result)}` : ""}</small>
                 <small>${result.detail}</small>
               </span>
               <span class="ranking-score">
@@ -570,21 +576,47 @@ function typeLabel(type) {
   return "Top 10 IA";
 }
 
+function signalSentText(record) {
+  const sentMinute = record.sentMinute ?? record.alert?.minute;
+  if (sentMinute !== null && sentMinute !== undefined) {
+    return `Sinal enviado aos ${sentMinute}'`;
+  }
+  if (!record.createdAt) return "Horário de envio indisponível";
+  const time = new Intl.DateTimeFormat("pt-BR", {
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(new Date(record.createdAt));
+  return `Sinal enviado às ${time}`;
+}
+
+function greenMomentText(record, result) {
+  if (!result.hit) return "";
+  if (record.type === "top10") return "Green no encerramento";
+  if (result.greenMinute !== null && result.greenMinute !== undefined) {
+    return `Green aos ${result.greenMinute}'`;
+  }
+  return "Green confirmado · minuto não registrado";
+}
+
 function renderSignalsReport(payload) {
   const summary = payload.summary || {};
-  const byType = summary.byType || {};
   const dateLabel = new Intl.DateTimeFormat("pt-BR").format(new Date(`${payload.date}T12:00:00`));
+  const selectedTypeLabel = typeLabel(payload.type || "top10");
 
   els.analysisState.classList.add("hidden");
   els.emptyState.classList.add("hidden");
   els.topPredictions.classList.remove("hidden");
+  els.topPredictions.classList.add("print-report");
   els.topPredictions.innerHTML = `
     <div class="top-predictions-head results-head">
       <div>
-        <p class="eyebrow">Histórico salvo no Firebase</p>
+        <p class="eyebrow">Histórico salvo no Firebase · ${selectedTypeLabel}</p>
         <h2>Relatório de ${dateLabel}</h2>
       </div>
-      <span>${summary.accuracy || 0}%</span>
+      <div class="report-head-actions">
+        <span>${summary.accuracy || 0}%</span>
+        <button id="reportPdfButton" class="pdf-button" type="button">Gerar PDF</button>
+      </div>
     </div>
     <div class="accuracy-grid">
       <div><span>Sinais</span><b>${summary.total || 0}</b></div>
@@ -592,12 +624,6 @@ function renderSignalsReport(payload) {
       <div><span>Acertos</span><b>${summary.hits || 0}</b></div>
       <div><span>Erros</span><b>${summary.misses || 0}</b></div>
       <div><span>Pendentes</span><b>${summary.pending || 0}</b></div>
-    </div>
-    <div class="accuracy-grid report-types">
-      ${["top10", "match-goal", "favorite-goal"].map(type => {
-        const item = byType[type] || {};
-        return `<div><span>${typeLabel(type)}</span><b>${item.total || 0}</b><small>${item.accuracy || 0}% acerto</small></div>`;
-      }).join("")}
     </div>
     ${(payload.results || []).length ? `
       <div class="prediction-ranking">
@@ -617,6 +643,7 @@ function renderSignalsReport(payload) {
                 <strong>${event.homeTeam?.name || "Mandante"} x ${event.awayTeam?.name || "Visitante"}</strong>
                 <small>${typeLabel(record.type)} · ${event.tournament?.name || "Competição"}</small>
                 <em>${market}</em>
+                <small>${signalSentText(record)}${result.hit ? ` · ${greenMomentText(record, result)}` : ""}</small>
                 <small>${result.detail}</small>
               </span>
               <span class="ranking-score">
@@ -630,16 +657,26 @@ function renderSignalsReport(payload) {
       </div>
     ` : `<p class="model-note">Nenhum sinal salvo para esta data.</p>`}
   `;
+  document.querySelector("#reportPdfButton")?.addEventListener("click", printSignalsReport);
 }
 
-async function showSignalsReport() {
-  els.reportButton.disabled = true;
-  els.reportButton.textContent = "Consultando";
+function openReportDialog() {
+  els.reportDateInput.value = els.dateInput.value;
+  els.reportTypeInput.value = ["top10", "match-goal"].includes(els.resultsType.value)
+    ? els.resultsType.value
+    : "top10";
+  els.reportDialog.showModal();
+}
+
+async function consultSignalsReport() {
+  els.consultReportButton.disabled = true;
+  els.consultReportButton.textContent = "Consultando";
   els.sourceStatus.textContent = "Consultando Firebase";
   try {
     const params = new URLSearchParams({
-      date: els.dateInput.value,
-      sport: els.sportInput.value
+      date: els.reportDateInput.value,
+      sport: "football",
+      type: els.reportTypeInput.value
     });
     const response = await fetch(`/api/signals-report?${params}`);
     const payload = await response.json();
@@ -647,16 +684,37 @@ async function showSignalsReport() {
       els.sourceMessage.textContent = payload.warning;
       els.sourceMessage.classList.remove("hidden");
     }
+    state.reportPayload = payload;
+    els.dateInput.value = payload.date;
     renderSignalsReport(payload);
     els.sourceStatus.textContent = `${payload.summary?.total || 0} sinais salvos`;
+    els.reportDialog.close();
   } catch (error) {
     els.sourceStatus.textContent = "Erro no relatório";
     els.topPredictions.classList.remove("hidden");
     els.topPredictions.innerHTML = `<p class="model-note">${error.message}</p>`;
   } finally {
-    els.reportButton.disabled = false;
-    els.reportButton.textContent = "Relatório da data";
+    els.consultReportButton.disabled = false;
+    els.consultReportButton.textContent = "Consultar relatório";
   }
+}
+
+function printSignalsReport() {
+  if (!state.reportPayload) return;
+  const previousTitle = document.title;
+  const reportName = typeLabel(state.reportPayload.type || "top10")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .toLowerCase();
+  document.title = `relatorio-${reportName}-${state.reportPayload.date}`;
+  document.body.classList.add("printing-report");
+  window.print();
+  window.setTimeout(() => {
+    document.body.classList.remove("printing-report");
+    document.title = previousTitle;
+  }, 500);
 }
 
 async function showPredictionResults() {
@@ -854,7 +912,8 @@ els.sportInput.addEventListener("change", () => {
 els.topPredictionsButton.addEventListener("click", generateTopPredictions);
 els.matchGoalButton.addEventListener("click", showMatchGoalAlerts);
 els.resultsButton.addEventListener("click", showPredictionResults);
-els.reportButton.addEventListener("click", showSignalsReport);
+els.reportButton.addEventListener("click", openReportDialog);
+els.consultReportButton.addEventListener("click", consultSignalsReport);
 els.searchInput.addEventListener("input", renderMatches);
 els.leagueFilter.addEventListener("change", renderMatches);
 els.startedToggle.addEventListener("click", () => {

@@ -502,6 +502,24 @@ select:focus {
   padding: 7px 11px;
 }
 
+.report-head-actions {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+
+.pdf-button {
+  background: #fff;
+  border-color: #fff;
+  color: var(--petrol);
+}
+
+@media print {
+  body.printing-report .pdf-button {
+    display: none !important;
+  }
+}
+
 .goal-alert-head {
   background: linear-gradient(135deg, #ff4b1f, #9d2d15);
 }
@@ -536,6 +554,109 @@ select:focus {
   display: block;
   font-size: 0.75rem;
   margin-top: 4px;
+}
+
+.report-dialog {
+  border: 0;
+  border-radius: 8px;
+  box-shadow: 0 24px 70px rgba(0, 34, 41, 0.28);
+  max-width: 560px;
+  padding: 0;
+  width: calc(100% - 32px);
+}
+
+.report-dialog::backdrop {
+  background: rgba(0, 25, 31, 0.58);
+}
+
+.report-dialog-head {
+  align-items: center;
+  background: var(--petrol);
+  color: #fff;
+  display: flex;
+  justify-content: space-between;
+  padding: 18px 20px;
+}
+
+.report-dialog-head h2,
+.report-dialog-head p {
+  color: #fff;
+  margin: 0;
+}
+
+.dialog-close {
+  background: transparent;
+  border: 0;
+  color: #fff;
+  font-size: 2rem;
+  height: 40px;
+  line-height: 1;
+  padding: 0;
+  width: 40px;
+}
+
+.report-dialog-fields {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 20px;
+}
+
+.report-dialog-fields label {
+  color: var(--petrol);
+  font-size: 0.8rem;
+  font-weight: 850;
+}
+
+.report-dialog-fields input,
+.report-dialog-fields select {
+  margin-top: 7px;
+  width: 100%;
+}
+
+.report-dialog-actions {
+  border-top: 1px solid var(--line);
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  padding: 16px 20px 20px;
+}
+
+@media print {
+  @page {
+    margin: 12mm;
+    size: A4 portrait;
+  }
+
+  body.printing-report {
+    background: #fff;
+  }
+
+  body.printing-report .topbar,
+  body.printing-report .controls,
+  body.printing-report .source-message,
+  body.printing-report .match-list,
+  body.printing-report .empty-state,
+  body.printing-report .analysis-state,
+  body.printing-report .report-dialog {
+    display: none !important;
+  }
+
+  body.printing-report .shell,
+  body.printing-report .workspace,
+  body.printing-report .analysis-panel,
+  body.printing-report .top-predictions {
+    display: block !important;
+    margin: 0;
+    max-width: none;
+    padding: 0;
+    width: 100%;
+  }
+
+  body.printing-report .ranking-card {
+    break-inside: avoid;
+    box-shadow: none;
+  }
 }
 
 .accuracy-grid span {
@@ -948,6 +1069,14 @@ select:focus {
 }
 
 @media (max-width: 560px) {
+  .report-dialog-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .report-dialog-actions {
+    flex-direction: column;
+  }
+
   .inputs-grid,
   .list-lines,
   .team-moment-grid,
