@@ -219,13 +219,30 @@ h2 {
 }
 
 .controls {
-  align-items: end;
   background: rgba(255, 255, 255, 0.96);
   border: 1px solid var(--line);
   border-radius: 8px;
   box-shadow: var(--soft-shadow);
-  flex-wrap: wrap;
+  display: grid;
+  gap: 12px;
   padding: 14px;
+}
+
+.filters-row,
+.signals-row {
+  align-items: end;
+  display: grid;
+  gap: 14px;
+}
+
+.filters-row {
+  grid-template-columns: minmax(170px, 0.9fr) minmax(170px, 0.9fr) minmax(220px, 1.2fr) minmax(250px, 1.55fr) minmax(140px, auto);
+}
+
+.signals-row {
+  border-top: 1px solid rgba(203, 215, 227, 0.86);
+  grid-template-columns: minmax(190px, 1fr) minmax(190px, 1fr) minmax(150px, 0.8fr) minmax(130px, auto) minmax(180px, auto) minmax(180px, auto) minmax(150px, auto);
+  padding-top: 12px;
 }
 
 .source-message {
@@ -241,14 +258,43 @@ h2 {
 label {
   color: var(--muted);
   display: grid;
-  flex: 1 1 190px;
   font-size: 0.82rem;
   font-weight: 750;
   gap: 7px;
+  min-width: 0;
 }
 
 .compact-label {
-  flex: 0 1 170px;
+  min-width: 0;
+}
+
+.market-label {
+  order: 1;
+}
+
+.goal-alert-button {
+  min-width: 190px;
+  order: 2;
+}
+
+.stake-label {
+  order: 3;
+}
+
+#resultsButton {
+  order: 4;
+}
+
+#reportButton {
+  order: 5;
+}
+
+#minuteSimulatorButton {
+  order: 6;
+}
+
+#loadButton {
+  order: 7;
 }
 
 input,
@@ -1082,6 +1128,16 @@ select:focus {
     margin-top: 14px;
   }
 
+  .filters-row,
+  .signals-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .goal-alert-button,
+  #loadButton {
+    min-width: 0;
+  }
+
   .match-list {
     border-right: 0;
     border-bottom: 1px solid var(--line);
@@ -1123,6 +1179,11 @@ select:focus {
 }
 
 @media (max-width: 560px) {
+  .filters-row,
+  .signals-row {
+    grid-template-columns: 1fr;
+  }
+
   .report-dialog-fields {
     grid-template-columns: 1fr;
   }

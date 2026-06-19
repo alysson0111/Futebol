@@ -1006,7 +1006,8 @@ function updateMatchGoalButton(count) {
   els.matchGoalButton.classList.toggle("active", count > 0);
 }
 
-async function refreshMatchGoalAlerts() {
+async function refreshMatchGoalAlerts(options = {}) {
+  const { silent = false } = options;
   if (els.sportInput.value !== "football") {
     state.matchGoalAlerts = [];
     updateMatchGoalButton(0);
@@ -1022,7 +1023,7 @@ async function refreshMatchGoalAlerts() {
     const payload = await response.json();
     state.matchGoalAlerts = payload.alerts || [];
     updateMatchGoalButton(state.matchGoalAlerts.length);
-    if (payload.warning) {
+    if (payload.warning && !silent) {
       els.sourceMessage.textContent = payload.warning;
       els.sourceMessage.classList.remove("hidden");
     }
@@ -1095,8 +1096,7 @@ async function loadEvents(options = {}) {
     }
     populateLeagueFilter();
     renderMatches();
-    state.matchGoalAlerts = [];
-    updateMatchGoalButton(0);
+    await refreshMatchGoalAlerts({ silent: true });
   } catch (error) {
     if (!silent) {
       els.sourceStatus.textContent = "Erro ao carregar";
@@ -1159,6 +1159,7 @@ els.matchGoalButton.addEventListener("click", showMatchGoalAlerts);
 els.resultsType.addEventListener("change", () => {
   state.matchGoalAlerts = [];
   updateMatchGoalButton(0);
+  refreshMatchGoalAlerts({ silent: true });
 });
 els.resultsButton.addEventListener("click", showPredictionResults);
 els.reportButton.addEventListener("click", openReportDialog);

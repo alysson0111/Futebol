@@ -26,6 +26,7 @@
       </section>
 
       <section class="controls">
+        <div class="filters-row">
         <label>
           Data
           <input id="dateInput" type="date">
@@ -49,9 +50,11 @@
           </select>
         </label>
         <button id="startedToggle" class="secondary-button" type="button" aria-pressed="false">Ao vivo agora</button>
+        </div>
+        <div class="signals-row">
         <button id="matchGoalButton" class="secondary-button goal-alert-button" type="button">Partida +0.5 gol</button>
-        <label class="compact-label">
-          Resultados
+        <label class="compact-label market-label">
+          Mercado do sinal
           <select id="resultsType">
             <option value="match-goal">Partida +0.5 gol</option>
             <option value="over-25">Over 2.5 gols</option>
@@ -60,7 +63,7 @@
             <option value="corners">Escanteios</option>
           </select>
         </label>
-        <label class="compact-label">
+        <label class="compact-label stake-label">
           Valor aposta
           <input id="stakeInput" type="number" min="0" step="1" value="10">
         </label>
@@ -68,6 +71,7 @@
         <button id="reportButton" class="secondary-button" type="button">Relatório por período</button>
         <button id="minuteSimulatorButton" class="secondary-button" type="button">Simular por minuto</button>
         <button id="loadButton" type="button">Atualizar jogos</button>
+        </div>
       </section>
       <p id="sourceMessage" class="source-message hidden"></p>
 
