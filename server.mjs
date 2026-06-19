@@ -21,6 +21,7 @@ const firebaseConfig = {
   privateKey: (process.env.FIREBASE_PRIVATE_KEY || "").replace(/\\n/g, "\n")
 };
 let firestore = null;
+const apiCache = new Map();
 let firebaseStatus = firebaseConfig.projectId && firebaseConfig.clientEmail && firebaseConfig.privateKey
   ? "aguardando conexão"
   : "não configurado";
@@ -31,6 +32,57 @@ const contentTypes = {
   ".js": "text/javascript; charset=utf-8",
   ".json": "application/json; charset=utf-8",
   ".svg": "image/svg+xml; charset=utf-8"
+};
+
+const simulatorMarkets = {
+  "match-over-05": {
+    label: "Partida +0.5 gol",
+    strategy: "minute-first-goal",
+    description: "Entram apenas jogos que ainda estavam 0 x 0 no minuto escolhido. Green quando o primeiro gol saiu depois desse minuto; red quando terminou 0 x 0."
+  },
+  "match-over-goals": {
+    label: "Over 2.5 gols",
+    strategy: "over-25-pre-match",
+    description: "Seleciona jogos com media projetada acima de 2.8, favorito em casa, ambas marcam em pelo menos 60% dos ultimos 10 jogos e odd Over 2.5 entre 1.70 e 2.10 quando a API disponibiliza."
+  },
+  "match-under-goals": {
+    label: "Under 2.5 gols",
+    strategy: "under-25-score",
+    description: "Scanner por pontuacao: so entram jogos com pelo menos 8 de 10 criterios para Under 2.5 gols."
+  },
+  handicap: {
+    label: "Handicap Asiatico",
+    strategy: "asian-handicap-score",
+    description: "Pontua o favorito de 0 a 10. Com 8+ procura AH -0.75 e -1.0; com 6 a 7 procura AH 0. Odds entre 1.85 e 2.05."
+  },
+  corners: {
+    label: "Escanteios",
+    strategy: "corners-pre-match",
+    description: "Seleciona favorito em casa, media conjunta acima de 10 escanteios, favorito com alto volume ofensivo/finalizacoes e contexto decisivo. Entradas planejadas: Over 8.5, Over 9.5 e Over 10.5 escanteios."
+  }
+};
+
+const marketSignalTypes = {
+  "match-goal": {
+    label: "Partida +0.5 gol",
+    market: "match-over-05"
+  },
+  "over-25": {
+    label: "Over 2.5 gols",
+    market: "match-over-goals"
+  },
+  "under-25": {
+    label: "Under 2.5 gols",
+    market: "match-under-goals"
+  },
+  handicap: {
+    label: "Handicap Asiatico",
+    market: "handicap"
+  },
+  corners: {
+    label: "Escanteios",
+    market: "corners"
+  }
 };
 
 const demoEvents = [
@@ -85,6 +137,32 @@ function json(res, status, body) {
     "cache-control": "no-store"
   });
   res.end(JSON.stringify(body));
+}
+
+async function fetchApiJson(url, options = {}, ttlMs = 60_000) {
+  const key = String(url);
+  const cached = apiCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.payload;
+  }
+
+  const response = await fetch(url, options);
+  if (!response.ok) {
+    if (response.status === 429) {
+      throw new Error("API-Football limitou as consultas por excesso de requisições. Aguarde 1 minuto e tente novamente.");
+    }
+    throw new Error(`API-Football respondeu ${response.status}`);
+  }
+
+  const payload = await response.json();
+  const hasApiErrors = Array.isArray(payload.errors)
+    ? payload.errors.length > 0
+    : payload.errors && typeof payload.errors === "object" && Object.keys(payload.errors).length > 0;
+  if (hasApiErrors) {
+    return payload;
+  }
+  apiCache.set(key, { expiresAt: Date.now() + ttlMs, payload });
+  return payload;
 }
 
 async function readHistory() {
@@ -180,11 +258,44 @@ async function readSignals(date, type = "") {
     });
 }
 
+function dateFromKey(date) {
+  const parsed = new Date(`${date}T12:00:00Z`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function isoDateKey(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function reportDates(startDate, endDate) {
+  const start = dateFromKey(startDate);
+  const end = dateFromKey(endDate || startDate);
+  if (!start || !end) {
+    throw new Error("Informe datas válidas para o relatório.");
+  }
+  if (start > end) {
+    throw new Error("A data inicial não pode ser maior que a data final.");
+  }
+
+  const dates = [];
+  const cursor = new Date(start);
+  while (cursor <= end) {
+    dates.push(isoDateKey(cursor));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+
+  if (dates.length > 62) {
+    throw new Error("Escolha um período de até 62 dias para manter a consulta estável.");
+  }
+
+  return dates;
+}
+
 async function recordPredictions(type, date, source, items) {
   const history = await readHistory();
   const now = new Date().toISOString();
   const incoming = items.map(item => ({
-    id: `${type}:${date}:${item.event.id}`,
+    id: `${type}:${date}:${item.event.id}${item.key ? `:${item.key}` : ""}`,
     type,
     date,
     source,
@@ -624,7 +735,7 @@ function liveFavoriteGoalAlert(event, prediction) {
   };
 }
 
-function liveMatchGoalAlert(event, prediction) {
+function liveMatchGoalAlert(event, prediction, liveMarket) {
   if (!isLiveEvent(event) || isFinishedEvent(event)) return null;
 
   const elapsed = Number(event.status?.elapsed || 0);
@@ -645,8 +756,15 @@ function liveMatchGoalAlert(event, prediction) {
     0.78
   );
   const fairOdd = Number((1 / estimatedProbability).toFixed(2));
+  const marketOdd = Number(liveMarket?.odd || 0);
+  const marketAvailable = liveMarket
+    && liveMarket.suspended === false
+    && liveMarket.market === "Match Goals"
+    && liveMarket.selection === "Over"
+    && Number(liveMarket.handicap) === 0.5
+    && Number.isFinite(marketOdd);
 
-  if (!isSecondHalfWindow || !isNilNil || fairOdd < 1.6) {
+  if (!isSecondHalfWindow || !isNilNil || !marketAvailable || marketOdd < 1.6) {
     return null;
   }
 
@@ -654,7 +772,11 @@ function liveMatchGoalAlert(event, prediction) {
     team: "Partida",
     label: "Partida +0.5 gol ao vivo",
     fairOdd,
+    marketOdd,
     minimumOdd: 1.6,
+    market: liveMarket.market,
+    selection: `${liveMarket.selection} ${liveMarket.handicap}`,
+    oddsUpdatedAt: liveMarket.updatedAt,
     probability: Math.round(estimatedProbability * 100),
     minute: elapsed,
     score: `${homeScore} x ${awayScore}`,
@@ -738,19 +860,6 @@ function evaluateRecord(record, currentEvent, greenMinute = null) {
     return { status: "pending", hit: null, score: scoreText, detail: "Jogo ainda sem resultado final." };
   }
 
-  if (record.type === "top10") {
-    const predicted = predictedWinner(record);
-    const actual = matchWinner(score);
-    const hit = predicted !== null && predicted === actual;
-    return {
-      status: "finished",
-      hit,
-      score: scoreText,
-      greenMinute: hit ? "Encerramento" : null,
-      detail: hit ? "Palpite principal acertou o resultado." : "Palpite principal não bateu com o resultado final."
-    };
-  }
-
   if (record.type === "favorite-goal") {
     const alert = record.alert || {};
     const homeName = record.event?.homeTeam?.name;
@@ -767,6 +876,30 @@ function evaluateRecord(record, currentEvent, greenMinute = null) {
       detail: hit
         ? `${alert.team} marcou depois do alerta.`
         : `${alert.team || "Favorito"} não marcou depois do alerta.`
+    };
+  }
+
+  if (["over-25", "under-25", "handicap"].includes(record.type)) {
+    const marketByType = {
+      "over-25": "match-over-goals",
+      "under-25": "match-under-goals",
+      handicap: "handicap"
+    };
+    return preMatchSignalResult(currentEvent, marketByType[record.type], {
+      line: record.alert?.line,
+      odd: record.alert?.marketOdd ?? record.alert?.fairOdd,
+      favoriteSide: record.alert?.favoriteSide
+    });
+  }
+
+  if (record.type === "corners") {
+    return {
+      status: "pending",
+      hit: null,
+      score: scoreText,
+      detail: finished
+        ? "Aguardando estatisticas de escanteios da API."
+        : "Jogo ainda nao terminou."
     };
   }
 
@@ -787,7 +920,7 @@ function accuracySummary(results) {
 }
 
 function reportSummary(results) {
-  const types = ["top10", "match-goal", "favorite-goal"];
+  const types = ["match-goal", "over-25", "under-25", "handicap", "corners", "favorite-goal"];
   return {
     ...accuracySummary(results),
     byType: Object.fromEntries(types.map(type => [
@@ -831,18 +964,12 @@ async function fetchApiFootballEvents(date, sport, options = {}) {
   }
   requestUrl.searchParams.set("timezone", "America/Sao_Paulo");
 
-  const response = await fetch(requestUrl, {
+  const payload = await fetchApiJson(requestUrl, {
     headers: {
       "accept": "application/json",
       "x-apisports-key": apiFootballKey
     }
-  });
-
-  if (!response.ok) {
-    throw new Error(`API-Football respondeu ${response.status}`);
-  }
-
-  const payload = await response.json();
+  }, options.liveOnly ? 20_000 : 300_000);
   if (Array.isArray(payload.errors) && payload.errors.length) {
     throw new Error(`API-Football: ${payload.errors.join(", ")}`);
   }
@@ -853,21 +980,462 @@ async function fetchApiFootballEvents(date, sport, options = {}) {
   return Array.isArray(payload.response) ? payload.response.map(normalizeApiFootballFixture).filter(event => event.id) : [];
 }
 
-async function fetchFixtureEvents(fixtureId) {
-  const requestUrl = new URL("https://v3.football.api-sports.io/fixtures/events");
-  requestUrl.searchParams.set("fixture", fixtureId);
-  const response = await fetch(requestUrl, {
+async function fetchLiveMatchGoalOdds() {
+  if (!apiFootballKey) {
+    throw new Error("Configure API_FOOTBALL_KEY para consultar as odds ao vivo");
+  }
+
+  const payload = await fetchApiJson("https://v3.football.api-sports.io/odds/live", {
     headers: {
       "accept": "application/json",
       "x-apisports-key": apiFootballKey
     }
-  });
-  if (!response.ok) throw new Error(`API-Football respondeu ${response.status}`);
-  const payload = await response.json();
+  }, 30_000);
+  if (payload.errors && typeof payload.errors === "object" && Object.keys(payload.errors).length) {
+    throw new Error(`API-Football odds: ${Object.values(payload.errors).join(", ")}`);
+  }
+
+  const marketsByFixture = new Map();
+  for (const item of Array.isArray(payload.response) ? payload.response : []) {
+    if (item.status?.finished || item.status?.blocked) continue;
+
+    const market = (item.odds || []).find(odd =>
+      Number(odd.id) === 25 || String(odd.name || "").toLowerCase() === "match goals"
+    );
+    const selections = (market?.values || [])
+      .filter(value =>
+        String(value.value || "").toLowerCase() === "over"
+        && Number(value.handicap) === 0.5
+        && value.suspended === false
+        && Number.isFinite(Number(value.odd))
+      )
+      .sort((a, b) => Number(b.odd) - Number(a.odd));
+    const selection = selections[0];
+    if (!selection) continue;
+
+    marketsByFixture.set(String(item.fixture?.id), {
+      market: "Match Goals",
+      selection: "Over",
+      handicap: 0.5,
+      odd: Number(selection.odd),
+      suspended: false,
+      updatedAt: item.update || null
+    });
+  }
+
+  return marketsByFixture;
+}
+
+async function fetchFixtureEvents(fixtureId) {
+  const requestUrl = new URL("https://v3.football.api-sports.io/fixtures/events");
+  requestUrl.searchParams.set("fixture", fixtureId);
+  const payload = await fetchApiJson(requestUrl, {
+    headers: {
+      "accept": "application/json",
+      "x-apisports-key": apiFootballKey
+    }
+  }, 600_000);
   if (payload.errors && Object.keys(payload.errors).length) {
     throw new Error(`API-Football: ${Object.values(payload.errors).join(", ")}`);
   }
   return Array.isArray(payload.response) ? payload.response : [];
+}
+
+async function fetchFixtureStatistics(fixtureId) {
+  const requestUrl = new URL("https://v3.football.api-sports.io/fixtures/statistics");
+  requestUrl.searchParams.set("fixture", fixtureId);
+  const payload = await fetchApiJson(requestUrl, {
+    headers: {
+      "accept": "application/json",
+      "x-apisports-key": apiFootballKey
+    }
+  }, 600_000);
+  if (payload.errors && Object.keys(payload.errors).length) {
+    throw new Error(`API-Football: ${Object.values(payload.errors).join(", ")}`);
+  }
+  return Array.isArray(payload.response) ? payload.response : [];
+}
+
+function statisticValue(teamStats, name) {
+  const stat = (teamStats?.statistics || []).find(item =>
+    String(item.type || "").toLowerCase() === String(name).toLowerCase()
+  );
+  const raw = stat?.value;
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw === "string" && raw.includes("%")) return Number(raw.replace("%", ""));
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
+}
+
+function fixtureCornersFromStats(stats) {
+  if (!Array.isArray(stats) || stats.length < 2) return null;
+  const homeCorners = statisticValue(stats[0], "Corner Kicks");
+  const awayCorners = statisticValue(stats[1], "Corner Kicks");
+  if (homeCorners === null || awayCorners === null) return null;
+  return { home: homeCorners, away: awayCorners, total: homeCorners + awayCorners };
+}
+
+function fixtureShotsFromStats(stats) {
+  if (!Array.isArray(stats) || stats.length < 2) return null;
+  const homeShots = statisticValue(stats[0], "Total Shots");
+  const awayShots = statisticValue(stats[1], "Total Shots");
+  if (homeShots === null || awayShots === null) return null;
+  return { home: homeShots, away: awayShots };
+}
+
+function fixtureShotsOnTargetFromStats(stats) {
+  if (!Array.isArray(stats) || stats.length < 2) return null;
+  const homeShots = statisticValue(stats[0], "Shots on Goal");
+  const awayShots = statisticValue(stats[1], "Shots on Goal");
+  if (homeShots === null || awayShots === null) return null;
+  return { home: homeShots, away: awayShots };
+}
+
+async function fetchTeamLastFixtures(teamId, last = 10) {
+  const requestUrl = new URL("https://v3.football.api-sports.io/fixtures");
+  requestUrl.searchParams.set("team", teamId);
+  requestUrl.searchParams.set("last", String(last));
+  requestUrl.searchParams.set("timezone", "America/Sao_Paulo");
+  const payload = await fetchApiJson(requestUrl, {
+    headers: {
+      "accept": "application/json",
+      "x-apisports-key": apiFootballKey
+    }
+  }, 600_000);
+  if (payload.errors && Object.keys(payload.errors).length) {
+    throw new Error(`API-Football: ${Object.values(payload.errors).join(", ")}`);
+  }
+  return Array.isArray(payload.response) ? payload.response.map(normalizeApiFootballFixture).filter(event => event.id) : [];
+}
+
+async function fetchFixtureOver25Odd(fixtureId) {
+  const requestUrl = new URL("https://v3.football.api-sports.io/odds");
+  requestUrl.searchParams.set("fixture", fixtureId);
+  const payload = await fetchApiJson(requestUrl, {
+    headers: {
+      "accept": "application/json",
+      "x-apisports-key": apiFootballKey
+    }
+  }, 600_000);
+  if (payload.errors && Object.keys(payload.errors).length) {
+    throw new Error(`API-Football: ${Object.values(payload.errors).join(", ")}`);
+  }
+
+  const bookmakers = Array.isArray(payload.response?.[0]?.bookmakers) ? payload.response[0].bookmakers : [];
+  const odds = [];
+  for (const bookmaker of bookmakers) {
+    for (const bet of bookmaker.bets || []) {
+      const betName = String(bet.name || "").toLowerCase();
+      if (!["goals over/under", "match goals"].includes(betName)) continue;
+      for (const value of bet.values || []) {
+        const label = String(value.value || "").toLowerCase();
+        if ((label.includes("over 2.5") || (label === "over" && Number(value.handicap) === 2.5)) && Number(value.odd)) {
+          odds.push(Number(value.odd));
+        }
+      }
+    }
+  }
+
+  if (!odds.length) return null;
+  return Number((odds.reduce((sum, odd) => sum + odd, 0) / odds.length).toFixed(2));
+}
+
+async function fetchFixtureUnder25Odd(fixtureId) {
+  const requestUrl = new URL("https://v3.football.api-sports.io/odds");
+  requestUrl.searchParams.set("fixture", fixtureId);
+  const payload = await fetchApiJson(requestUrl, {
+    headers: {
+      "accept": "application/json",
+      "x-apisports-key": apiFootballKey
+    }
+  }, 600_000);
+  if (payload.errors && Object.keys(payload.errors).length) {
+    throw new Error(`API-Football: ${Object.values(payload.errors).join(", ")}`);
+  }
+
+  const bookmakers = Array.isArray(payload.response?.[0]?.bookmakers) ? payload.response[0].bookmakers : [];
+  const odds = [];
+  for (const bookmaker of bookmakers) {
+    for (const bet of bookmaker.bets || []) {
+      const betName = String(bet.name || "").toLowerCase();
+      if (!["goals over/under", "match goals"].includes(betName)) continue;
+      for (const value of bet.values || []) {
+        const label = String(value.value || "").toLowerCase();
+        if ((label.includes("under 2.5") || (label === "under" && Number(value.handicap) === 2.5)) && Number(value.odd)) {
+          odds.push(Number(value.odd));
+        }
+      }
+    }
+  }
+
+  if (!odds.length) return null;
+  return Number((odds.reduce((sum, odd) => sum + odd, 0) / odds.length).toFixed(2));
+}
+
+async function fetchFixtureAsianHandicapOdd(fixtureId, side = "home", line = -0.75) {
+  const requestUrl = new URL("https://v3.football.api-sports.io/odds");
+  requestUrl.searchParams.set("fixture", fixtureId);
+  const payload = await fetchApiJson(requestUrl, {
+    headers: {
+      "accept": "application/json",
+      "x-apisports-key": apiFootballKey
+    }
+  }, 600_000);
+  if (payload.errors && Object.keys(payload.errors).length) {
+    throw new Error(`API-Football: ${Object.values(payload.errors).join(", ")}`);
+  }
+
+  const bookmakers = Array.isArray(payload.response?.[0]?.bookmakers) ? payload.response[0].bookmakers : [];
+  const odds = [];
+  for (const bookmaker of bookmakers) {
+    for (const bet of bookmaker.bets || []) {
+      const betName = String(bet.name || "").toLowerCase();
+      if (!betName.includes("asian handicap")) continue;
+      for (const value of bet.values || []) {
+        const label = String(value.value || "").toLowerCase();
+        const expectedSide = side === "home" ? "home" : "away";
+        const normalizedLine = Number(line);
+        const isSide = label.includes(expectedSide);
+        const lineMatch = label.match(/[-+]?\\d+(?:\\.\\d+)?/);
+        const parsedLine = lineMatch ? Number(lineMatch[0]) : null;
+        const hasLine = parsedLine !== null && Math.abs(parsedLine - normalizedLine) < 0.001;
+        if (isSide && hasLine && Number(value.odd)) {
+          odds.push(Number(value.odd));
+        }
+      }
+    }
+  }
+
+  if (!odds.length) return null;
+  return Number((odds.reduce((sum, odd) => sum + odd, 0) / odds.length).toFixed(2));
+}
+
+function teamRecentMetrics(teamId, fixtures) {
+  const sample = fixtures.filter(event => isFinishedEvent(event)).slice(0, 10);
+  if (!sample.length) {
+    return { games: 0, scoredAvg: 0, concededAvg: 0, totalAvg: 0, bttsRate: 0 };
+  }
+
+  let scored = 0;
+  let conceded = 0;
+  let btts = 0;
+  let over25 = 0;
+  let firstHalfGoal = 0;
+  for (const event of sample) {
+    const score = finalScore(event);
+    if (!score) continue;
+    const isHome = String(event.homeTeam?.id) === String(teamId);
+    const teamGoals = isHome ? score.home : score.away;
+    const opponentGoals = isHome ? score.away : score.home;
+    scored += teamGoals;
+    conceded += opponentGoals;
+    if (score.home + score.away > 2.5) over25 += 1;
+    if (teamGoals > 0 && opponentGoals > 0) btts += 1;
+    const halfHome = Number(event.score?.halftime?.home ?? 0);
+    const halfAway = Number(event.score?.halftime?.away ?? 0);
+    if (halfHome + halfAway > 0) firstHalfGoal += 1;
+  }
+
+  return {
+    games: sample.length,
+    scoredAvg: Number((scored / sample.length).toFixed(2)),
+    concededAvg: Number((conceded / sample.length).toFixed(2)),
+    totalAvg: Number(((scored + conceded) / sample.length).toFixed(2)),
+    bttsRate: Math.round((btts / sample.length) * 100),
+    over25Rate: Math.round((over25 / sample.length) * 100),
+    firstHalfGoalRate: Math.round((firstHalfGoal / sample.length) * 100)
+  };
+}
+
+function projectedGoals(homeMetrics, awayMetrics) {
+  return Number(((homeMetrics.scoredAvg + homeMetrics.concededAvg + awayMetrics.scoredAvg + awayMetrics.concededAvg) / 2).toFixed(2));
+}
+
+function underLeagueScore(event) {
+  const text = `${event.tournament?.name || ""} ${event.tournament?.category?.name || ""}`.toLowerCase();
+  const good = [
+    "brasileiro serie b",
+    "brasileirão série b",
+    "primera nacional",
+    "uruguay",
+    "uruguai",
+    "paraguay",
+    "paraguai"
+  ];
+  const bad = ["bundesliga", "eredivisie", "austrian bundesliga", "austria bundesliga"];
+  if (bad.some(name => text.includes(name))) return { pass: false, label: "liga ruim para under" };
+  if (good.some(name => text.includes(name))) return { pass: true, label: "liga favoravel para under" };
+  return { pass: true, label: "liga neutra" };
+}
+
+function motivationScore(event) {
+  const text = `${event.tournament?.round || ""} ${event.tournament?.name || ""}`.toLowerCase();
+  const decisive = /final|semi|playoff|promotion|relegation|mata|quartas|oitavas|desempate/.test(text);
+  return {
+    pass: !decisive,
+    label: decisive ? "jogo decisivo evitado" : "fase regular/meio de tabela presumido"
+  };
+}
+
+function underGrade(score) {
+  if (score >= 10) return "A+";
+  if (score >= 9) return "A";
+  if (score >= 8) return "B+";
+  if (score >= 7) return "B";
+  return "Descartar";
+}
+
+function under25Criteria(event, homeMetrics, awayMetrics, homeShotMetrics, awayShotMetrics, under25Odd) {
+  const projected = projectedGoals(homeMetrics, awayMetrics);
+  const motivation = motivationScore(event);
+  const league = underLeagueScore(event);
+  const combinedBttsRate = Math.round((homeMetrics.bttsRate + awayMetrics.bttsRate) / 2);
+  const combinedOver25Rate = Math.round((homeMetrics.over25Rate + awayMetrics.over25Rate) / 2);
+  const combinedFirstHalfGoalRate = Math.round((homeMetrics.firstHalfGoalRate + awayMetrics.firstHalfGoalRate) / 2);
+  const combinedShotsOnTarget = homeShotMetrics.shotsOnTargetAvg !== null && awayShotMetrics.shotsOnTargetAvg !== null
+    ? Number((homeShotMetrics.shotsOnTargetAvg + awayShotMetrics.shotsOnTargetAvg).toFixed(2))
+    : null;
+
+  const checks = [
+    { key: "scoredAvg", label: "Times marcam ate 1.2 gol/jogo", pass: homeMetrics.scoredAvg <= 1.2 && awayMetrics.scoredAvg <= 1.2 },
+    { key: "concededAvg", label: "Times sofrem ate 1.2 gol/jogo", pass: homeMetrics.concededAvg <= 1.2 && awayMetrics.concededAvg <= 1.2 },
+    { key: "over25Rate", label: "Over 2.5 ate 40%", pass: combinedOver25Rate <= 40 },
+    { key: "bttsRate", label: "BTTS ate 50%", pass: combinedBttsRate <= 50 },
+    { key: "xg", label: "xG ate 2.50", pass: false, unavailable: true },
+    { key: "shotsOnTarget", label: "Finalizacoes certas ate 8", pass: combinedShotsOnTarget !== null && combinedShotsOnTarget <= 8, unavailable: combinedShotsOnTarget === null },
+    { key: "firstHalfGoal", label: "Menos de 60% com gol no 1T", pass: combinedFirstHalfGoalRate < 60 },
+    { key: "motivation", label: "Evitar jogo decisivo", pass: motivation.pass },
+    { key: "odds", label: "Odd Under 2.5 entre 1.70 e 2.20", pass: under25Odd === null || (under25Odd >= 1.7 && under25Odd <= 2.2), unavailable: under25Odd === null },
+    { key: "league", label: "Liga favoravel/neutra para Under", pass: league.pass }
+  ];
+  const score = checks.filter(check => check.pass).length;
+
+  return {
+    score,
+    grade: underGrade(score),
+    projectedGoals: projected,
+    combinedBttsRate,
+    combinedOver25Rate,
+    combinedFirstHalfGoalRate,
+    combinedShotsOnTarget,
+    under25Odd,
+    motivation: motivation.label,
+    league: league.label,
+    checks
+  };
+}
+
+function handicapFavorite(event, prediction) {
+  const home = prediction.probabilities.home;
+  const away = prediction.probabilities.away;
+  if (home >= away) {
+    return {
+      side: "home",
+      team: event.homeTeam?.name,
+      probability: home,
+      opponentProbability: away,
+      isHome: true
+    };
+  }
+  return {
+    side: "away",
+    team: event.awayTeam?.name,
+    probability: away,
+    opponentProbability: home,
+    isHome: false
+  };
+}
+
+function handicapScore(event, favorite, favoriteMetrics, opponentMetrics, favoriteShotMetrics, opponentShotMetrics) {
+  const checks = [
+    { key: "form", pass: favorite.probability >= 46, label: "Forma/probabilidade recente" },
+    { key: "attack", pass: favoriteMetrics.scoredAvg >= 1.35, label: "Ataque forte" },
+    { key: "defense", pass: favoriteMetrics.concededAvg <= 1.25, label: "Defesa confiavel" },
+    { key: "homeAway", pass: favorite.isHome || favorite.probability >= 52, label: "Casa/fora favoravel" },
+    { key: "motivation", pass: motivationScore(event).pass, label: "Motivacao sem risco decisivo" },
+    { key: "lineup", pass: true, label: "Escalacao presumida ok" },
+    { key: "edge", pass: favorite.probability >= opponentMetrics.concededAvg * 10 + 38, label: "Superioridade no confronto" },
+    { key: "opponentWeak", pass: opponentMetrics.concededAvg >= 1.15 || opponentMetrics.totalAvg >= 2.5, label: "Adversario vulneravel" },
+    { key: "favoriteGoals", pass: favoriteMetrics.scoredAvg >= 2.0, label: "Media superior a 2 gols" },
+    { key: "shots", pass: favoriteShotMetrics.shotsAvg === null || favoriteShotMetrics.shotsAvg >= 10, label: "Volume ofensivo/finalizacoes" }
+  ];
+  const score = checks.filter(check => check.pass).length;
+  return { score, checks };
+}
+
+function handicapCandidateLines(score) {
+  if (score >= 8) return [-0.75, -1];
+  if (score >= 6) return [0, -0.25];
+  return [];
+}
+
+function handicapOutcome(margin, line, odd) {
+  if (line === 0) {
+    if (margin > 0) return { outcome: "full-win", hit: true, profitUnits: odd - 1 };
+    if (margin === 0) return { outcome: "push", hit: true, profitUnits: 0 };
+    return { outcome: "loss", hit: false, profitUnits: -1 };
+  }
+  if (line === -1) {
+    if (margin >= 2) return { outcome: "full-win", hit: true, profitUnits: odd - 1 };
+    if (margin === 1) return { outcome: "push", hit: true, profitUnits: 0 };
+    return { outcome: "loss", hit: false, profitUnits: -1 };
+  }
+  if (line === -0.75) {
+    if (margin >= 2) return { outcome: "full-win", hit: true, profitUnits: odd - 1 };
+    if (margin === 1) return { outcome: "half-win", hit: true, profitUnits: (odd - 1) / 2 };
+    return { outcome: "loss", hit: false, profitUnits: -1 };
+  }
+  if (line === -0.25) {
+    if (margin > 0) return { outcome: "full-win", hit: true, profitUnits: odd - 1 };
+    if (margin === 0) return { outcome: "half-loss", hit: false, profitUnits: -0.5 };
+    return { outcome: "loss", hit: false, profitUnits: -1 };
+  }
+  return { outcome: "loss", hit: false, profitUnits: -1 };
+}
+
+async function teamRecentCornerMetrics(teamId, fixtures) {
+  const sample = fixtures.filter(event => isFinishedEvent(event)).slice(0, 5);
+  if (!sample.length) {
+    return { games: 0, cornersAvg: null, shotsAvg: null };
+  }
+
+  let cornerTotal = 0;
+  let cornerGames = 0;
+  let shotTotal = 0;
+  let shotGames = 0;
+  let shotsOnTargetTotal = 0;
+  let shotsOnTargetGames = 0;
+  await mapWithConcurrency(sample, 2, async event => {
+    try {
+      const stats = await fetchFixtureStatistics(event.id);
+      const corners = fixtureCornersFromStats(stats);
+      const shots = fixtureShotsFromStats(stats);
+      const shotsOnTarget = fixtureShotsOnTargetFromStats(stats);
+      const isHome = String(event.homeTeam?.id) === String(teamId);
+      if (corners) {
+        cornerTotal += isHome ? corners.home : corners.away;
+        cornerGames += 1;
+      }
+      if (shots) {
+        shotTotal += isHome ? shots.home : shots.away;
+        shotGames += 1;
+      }
+      if (shotsOnTarget) {
+        shotsOnTargetTotal += isHome ? shotsOnTarget.home : shotsOnTarget.away;
+        shotsOnTargetGames += 1;
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  });
+
+  return {
+    games: sample.length,
+    cornersAvg: cornerGames ? Number((cornerTotal / cornerGames).toFixed(2)) : null,
+    shotsAvg: shotGames ? Number((shotTotal / shotGames).toFixed(2)) : null,
+    shotsOnTargetAvg: shotsOnTargetGames ? Number((shotsOnTargetTotal / shotsOnTargetGames).toFixed(2)) : null
+  };
 }
 
 function greenMinuteFromEvents(record, fixtureEvents) {
@@ -882,8 +1450,700 @@ function greenMinuteFromEvents(record, fixtureEvents) {
   return extra > 0 ? `${elapsed}+${extra}` : elapsed;
 }
 
+function goalMinuteValue(event) {
+  const elapsed = Number(event.time?.elapsed || 0);
+  const extra = Number(event.time?.extra || 0);
+  return elapsed + Math.max(0, extra);
+}
+
+function goalMinuteText(event) {
+  const elapsed = Number(event.time?.elapsed || 0);
+  const extra = Number(event.time?.extra || 0);
+  return extra > 0 ? `${elapsed}+${extra}` : String(elapsed);
+}
+
+function firstGoalFromEvents(fixtureEvents) {
+  return fixtureEvents
+    .filter(event => String(event.type || "").toLowerCase() === "goal")
+    .sort((a, b) => goalMinuteValue(a) - goalMinuteValue(b))[0] || null;
+}
+
+function finalGoalsTotal(event) {
+  const score = finalScore(event);
+  return score ? score.home + score.away : 0;
+}
+
+function halftimeGoalsTotal(event) {
+  const home = event.score?.halftime?.home;
+  const away = event.score?.halftime?.away;
+  if (home === null || home === undefined || away === null || away === undefined) return null;
+  return Number(home) + Number(away);
+}
+
+function minuteSimulatorSummary(results) {
+  const hits = results.filter(item => item.hit).length;
+  const misses = results.filter(item => !item.hit).length;
+  const halfWins = results.filter(item => item.outcome === "half-win").length;
+  const total = results.length;
+  const hitRate = total ? Math.round((hits / total) * 100) : 0;
+  const profitUnits = results.some(item => item.profitUnits !== undefined)
+    ? Number(results.reduce((sum, item) => sum + Number(item.profitUnits || 0), 0).toFixed(2))
+    : null;
+  return {
+    total,
+    hits,
+    misses,
+    halfWins,
+    hitRate,
+    profitUnits,
+    roi: profitUnits !== null && total ? Number(((profitUnits / total) * 100).toFixed(1)) : null,
+    breakEvenOdd: hits ? Number((total / hits).toFixed(2)) : 0
+  };
+}
+
+async function mapWithConcurrency(items, limit, mapper) {
+  const results = [];
+  for (let index = 0; index < items.length; index += limit) {
+    const chunk = items.slice(index, index + limit);
+    results.push(...await Promise.all(chunk.map(mapper)));
+    if (index + limit < items.length) {
+      await new Promise(resolve => setTimeout(resolve, 350));
+    }
+  }
+  return results;
+}
+
+async function runMinuteSimulationForDate(date, sport, entryMinute) {
+  const events = await fetchApiFootballEvents(date, sport);
+  const finished = events
+    .map(normalizeEvent)
+    .filter(event => isFinishedEvent(event));
+  const candidates = finished.filter(event => {
+    const totalGoals = finalGoalsTotal(event);
+    if (totalGoals === 0) return true;
+    const halftimeTotal = halftimeGoalsTotal(event);
+    return entryMinute < 46 || halftimeTotal === null || halftimeTotal === 0;
+  });
+
+  const results = candidates
+    .filter(event => finalGoalsTotal(event) === 0)
+    .map(event => {
+      const score = finalScore(event);
+      return {
+        date,
+        event,
+        hit: false,
+        firstGoalMinute: null,
+        firstGoalText: "",
+        finalScore: score ? `${score.home} x ${score.away}` : "0 x 0"
+      };
+    });
+  const warnings = [];
+  const goalCandidates = candidates.filter(event => finalGoalsTotal(event) > 0);
+  const limitedGoalCandidates = goalCandidates.slice(0, 30);
+  if (goalCandidates.length > limitedGoalCandidates.length) {
+    warnings.push(`Amostra limitada: ${limitedGoalCandidates.length} de ${goalCandidates.length} partidas com gol foram consultadas.`);
+  }
+  const goalResults = await mapWithConcurrency(limitedGoalCandidates, 3, async event => {
+    const score = finalScore(event);
+    const finalScoreText = score ? `${score.home} x ${score.away}` : "pendente";
+    try {
+      const fixtureEvents = await fetchFixtureEvents(event.id);
+      const firstGoal = firstGoalFromEvents(fixtureEvents);
+      if (!firstGoal) return null;
+      const firstGoalMinute = goalMinuteValue(firstGoal);
+      if (firstGoalMinute >= entryMinute) {
+        return {
+          date,
+          event,
+          hit: true,
+          firstGoalMinute,
+          firstGoalText: goalMinuteText(firstGoal),
+          finalScore: finalScoreText
+        };
+      }
+      return null;
+    } catch (error) {
+      warnings.push(`${event.id}: ${error.message}`);
+      return null;
+    }
+  });
+
+  results.push(...goalResults.filter(Boolean));
+
+  return { results, warnings };
+}
+
+async function runOver25SimulationForDate(date, sport) {
+  const events = await fetchApiFootballEvents(date, sport);
+  const finished = events
+    .map(normalizeEvent)
+    .filter(event => isFinishedEvent(event));
+  const limited = finished.slice(0, 30);
+  const warnings = [];
+  if (finished.length > limited.length) {
+    warnings.push(`Amostra limitada: ${limited.length} de ${finished.length} jogos finalizados foram analisados.`);
+  }
+
+  const analyzed = await mapWithConcurrency(limited, 3, async event => {
+    try {
+      const [homeLast, awayLast, over25Odd] = await Promise.all([
+        fetchTeamLastFixtures(event.homeTeam?.id, 10),
+        fetchTeamLastFixtures(event.awayTeam?.id, 10),
+        fetchFixtureOver25Odd(event.id).catch(() => null)
+      ]);
+      const homeMetrics = teamRecentMetrics(event.homeTeam?.id, homeLast);
+      const awayMetrics = teamRecentMetrics(event.awayTeam?.id, awayLast);
+      const projected = projectedGoals(homeMetrics, awayMetrics);
+      const prediction = predictMatch(event);
+      const favoriteHome = prediction.probabilities.home >= prediction.probabilities.away
+        && prediction.probabilities.home >= prediction.probabilities.draw;
+      const bttsOk = homeMetrics.bttsRate >= 60 && awayMetrics.bttsRate >= 60;
+      const goalsOk = projected > 2.8;
+      const oddOk = over25Odd === null || (over25Odd >= 1.7 && over25Odd <= 2.1);
+      const shotsAvailable = false;
+      const qualifies = goalsOk && favoriteHome && bttsOk && oddOk;
+      if (!qualifies) return null;
+
+      const score = finalScore(event);
+      const totalGoals = score ? score.home + score.away : 0;
+      return {
+        date,
+        event,
+        hit: totalGoals >= 3,
+        finalScore: score ? `${score.home} x ${score.away}` : "pendente",
+        totalGoals,
+        over25Odd,
+        firstGoalMinute: null,
+        firstGoalText: "",
+        criteria: {
+          projectedGoals: projected,
+          favoriteHome,
+          homeBttsRate: homeMetrics.bttsRate,
+          awayBttsRate: awayMetrics.bttsRate,
+          homeScoredAvg: homeMetrics.scoredAvg,
+          homeConcededAvg: homeMetrics.concededAvg,
+          awayScoredAvg: awayMetrics.scoredAvg,
+          awayConcededAvg: awayMetrics.concededAvg,
+          oddOk,
+          shotsAvailable
+        }
+      };
+    } catch (error) {
+      warnings.push(`${event.id}: ${error.message}`);
+      return null;
+    }
+  });
+
+  return { results: analyzed.filter(Boolean), warnings };
+}
+
+async function runCornersSimulationForDate(date, sport) {
+  const events = await fetchApiFootballEvents(date, sport);
+  const finished = events
+    .map(normalizeEvent)
+    .filter(event => isFinishedEvent(event));
+  const limited = finished.slice(0, 20);
+  const warnings = [];
+  if (finished.length > limited.length) {
+    warnings.push(`Amostra limitada: ${limited.length} de ${finished.length} jogos finalizados foram analisados.`);
+  }
+
+  const analyzed = await mapWithConcurrency(limited, 2, async event => {
+    try {
+      const prediction = predictMatch(event);
+      const favoriteHome = prediction.probabilities.home >= prediction.probabilities.away
+        && prediction.probabilities.home >= prediction.probabilities.draw;
+      if (!favoriteHome) return null;
+
+      const [homeLast, awayLast, fixtureStats] = await Promise.all([
+        fetchTeamLastFixtures(event.homeTeam?.id, 10),
+        fetchTeamLastFixtures(event.awayTeam?.id, 10),
+        fetchFixtureStatistics(event.id)
+      ]);
+      const [homeCorners, awayCorners] = await Promise.all([
+        teamRecentCornerMetrics(event.homeTeam?.id, homeLast),
+        teamRecentCornerMetrics(event.awayTeam?.id, awayLast)
+      ]);
+      const matchCorners = fixtureCornersFromStats(fixtureStats);
+      const matchShots = fixtureShotsFromStats(fixtureStats);
+      const jointCornersAvg = homeCorners.cornersAvg !== null && awayCorners.cornersAvg !== null
+        ? Number((homeCorners.cornersAvg + awayCorners.cornersAvg).toFixed(2))
+        : null;
+      const favoriteShotsAvg = homeCorners.shotsAvg;
+      const decisiveGame = /final|semi|playoff|promotion|relegation|mata|quartas|oitavas/i.test(
+        `${event.tournament?.round || ""} ${event.tournament?.name || ""}`
+      );
+      const cornersOk = jointCornersAvg !== null && jointCornersAvg > 10;
+      const shotsOk = favoriteShotsAvg !== null && favoriteShotsAvg > 10;
+      const dataAvailable = Boolean(matchCorners && jointCornersAvg !== null && favoriteShotsAvg !== null);
+      if (!dataAvailable || !cornersOk || !shotsOk) return null;
+
+      const lines = [8.5, 9.5, 10.5];
+      return lines.map(line => ({
+        date,
+        event,
+        hit: matchCorners.total > line,
+        finalScore: `${matchCorners.total} escanteios`,
+        totalCorners: matchCorners.total,
+        line,
+        firstGoalMinute: null,
+        firstGoalText: "",
+        criteria: {
+          favoriteHome,
+          jointCornersAvg,
+          favoriteShotsAvg,
+          matchShots,
+          decisiveGame,
+          cornersOk,
+          shotsOk
+        }
+      }));
+    } catch (error) {
+      warnings.push(`${event.id}: ${error.message}`);
+      return null;
+    }
+  });
+
+  const results = analyzed.flatMap(item => Array.isArray(item) ? item : item ? [item] : []);
+  if (!results.length) {
+    warnings.push("A API nao retornou dados suficientes de escanteios/finalizacoes para validar entradas.");
+  }
+  return { results, warnings };
+}
+
+async function runUnder25SimulationForDate(date, sport) {
+  const events = await fetchApiFootballEvents(date, sport);
+  const finished = events
+    .map(normalizeEvent)
+    .filter(event => isFinishedEvent(event));
+  const limited = finished.slice(0, 30);
+  const warnings = [];
+  if (finished.length > limited.length) {
+    warnings.push(`Amostra limitada: ${limited.length} de ${finished.length} jogos finalizados foram analisados.`);
+  }
+
+  const analyzed = await mapWithConcurrency(limited, 3, async event => {
+    try {
+      const [homeLast, awayLast, under25Odd] = await Promise.all([
+        fetchTeamLastFixtures(event.homeTeam?.id, 10),
+        fetchTeamLastFixtures(event.awayTeam?.id, 10),
+        fetchFixtureUnder25Odd(event.id).catch(() => null)
+      ]);
+      const [homeShotMetrics, awayShotMetrics] = await Promise.all([
+        teamRecentCornerMetrics(event.homeTeam?.id, homeLast),
+        teamRecentCornerMetrics(event.awayTeam?.id, awayLast)
+      ]);
+      const homeMetrics = teamRecentMetrics(event.homeTeam?.id, homeLast);
+      const awayMetrics = teamRecentMetrics(event.awayTeam?.id, awayLast);
+      const criteria = under25Criteria(event, homeMetrics, awayMetrics, homeShotMetrics, awayShotMetrics, under25Odd);
+      if (criteria.score < 8) return null;
+
+      const score = finalScore(event);
+      const totalGoals = score ? score.home + score.away : 0;
+      return {
+        date,
+        event,
+        hit: totalGoals <= 2,
+        finalScore: score ? `${score.home} x ${score.away}` : "pendente",
+        totalGoals,
+        under25Odd,
+        firstGoalMinute: null,
+        firstGoalText: "",
+        criteria
+      };
+    } catch (error) {
+      warnings.push(`${event.id}: ${error.message}`);
+      return null;
+    }
+  });
+
+  return { results: analyzed.filter(Boolean), warnings };
+}
+
+async function runAsianHandicapSimulationForDate(date, sport) {
+  const events = await fetchApiFootballEvents(date, sport);
+  const finished = events
+    .map(normalizeEvent)
+    .filter(event => isFinishedEvent(event));
+  const limited = finished.slice(0, 30);
+  const warnings = [];
+  if (finished.length > limited.length) {
+    warnings.push(`Amostra limitada: ${limited.length} de ${finished.length} jogos finalizados foram analisados.`);
+  }
+
+  const analyzed = await mapWithConcurrency(limited, 3, async event => {
+    try {
+      const prediction = predictMatch(event);
+      const favorite = handicapFavorite(event, prediction);
+
+      const [homeLast, awayLast] = await Promise.all([
+        fetchTeamLastFixtures(event.homeTeam?.id, 10),
+        fetchTeamLastFixtures(event.awayTeam?.id, 10)
+      ]);
+      const homeMetrics = teamRecentMetrics(event.homeTeam?.id, homeLast);
+      const awayMetrics = teamRecentMetrics(event.awayTeam?.id, awayLast);
+      const [homeShotMetrics, awayShotMetrics] = await Promise.all([
+        teamRecentCornerMetrics(event.homeTeam?.id, homeLast),
+        teamRecentCornerMetrics(event.awayTeam?.id, awayLast)
+      ]);
+      const favoriteMetrics = favorite.side === "home" ? homeMetrics : awayMetrics;
+      const opponentMetrics = favorite.side === "home" ? awayMetrics : homeMetrics;
+      const favoriteShotMetrics = favorite.side === "home" ? homeShotMetrics : awayShotMetrics;
+      const opponentShotMetrics = favorite.side === "home" ? awayShotMetrics : homeShotMetrics;
+      const scoreInfo = handicapScore(event, favorite, favoriteMetrics, opponentMetrics, favoriteShotMetrics, opponentShotMetrics);
+      const candidateLines = handicapCandidateLines(scoreInfo.score);
+      if (!candidateLines.length) return null;
+
+      let selected = null;
+      for (const line of candidateLines) {
+        const odd = await fetchFixtureAsianHandicapOdd(event.id, favorite.side, line).catch(() => null);
+        if (odd !== null && odd >= 1.85 && odd <= 2.05) {
+          selected = { line, odd };
+          break;
+        }
+      }
+      if (!selected) return null;
+
+      const score = finalScore(event);
+      const homeMargin = score ? score.home - score.away : 0;
+      const margin = favorite.side === "home" ? homeMargin : -homeMargin;
+      const result = handicapOutcome(margin, selected.line, selected.odd);
+
+      return {
+        date,
+        event,
+        hit: result.hit,
+        outcome: result.outcome,
+        profitUnits: Number(result.profitUnits.toFixed(2)),
+        finalScore: score ? `${score.home} x ${score.away}` : "pendente",
+        handicapLine: selected.line,
+        handicapOdd: selected.odd,
+        handicapSide: favorite.side,
+        favoriteTeam: favorite.team,
+        handicapScore: scoreInfo.score,
+        totalGoals: score ? score.home + score.away : 0,
+        firstGoalMinute: null,
+        firstGoalText: "",
+        criteria: {
+          favoriteProbability: favorite.probability,
+          favoriteScoredAvg: favoriteMetrics.scoredAvg,
+          favoriteConcededAvg: favoriteMetrics.concededAvg,
+          opponentConcededAvg: opponentMetrics.concededAvg,
+          favoriteShotsAvg: favoriteShotMetrics.shotsAvg,
+          checks: scoreInfo.checks
+        }
+      };
+    } catch (error) {
+      warnings.push(`${event.id}: ${error.message}`);
+      return null;
+    }
+  });
+
+  return { results: analyzed.filter(Boolean), warnings };
+}
+
+function preMatchSignalResult(event, market, data) {
+  const prediction = predictMatch(event);
+  const score = finalScore(event);
+  const totalGoals = score ? score.home + score.away : 0;
+
+  if (!isFinishedEvent(event) || !score) {
+    return {
+      status: "pending",
+      hit: null,
+      score: score ? `${score.home} x ${score.away}` : "pendente",
+      detail: "Jogo ainda nao terminou."
+    };
+  }
+
+  if (market === "match-over-goals") {
+    const hit = totalGoals >= 3;
+    return {
+      status: "finished",
+      hit,
+      score: `${score.home} x ${score.away}`,
+      detail: hit ? "Over 2.5 gols confirmado." : "A partida terminou abaixo de 3 gols."
+    };
+  }
+
+  if (market === "match-under-goals") {
+    const hit = totalGoals <= 2;
+    return {
+      status: "finished",
+      hit,
+      score: `${score.home} x ${score.away}`,
+      detail: hit ? "Under 2.5 gols confirmado." : "A partida passou de 2 gols."
+    };
+  }
+
+  if (market === "handicap") {
+    const favorite = data?.favoriteSide
+      ? { side: data.favoriteSide }
+      : handicapFavorite(event, prediction);
+    const line = Number(data?.line ?? -0.75);
+    const odd = Number(data?.odd ?? 1.9);
+    const homeMargin = score.home - score.away;
+    const margin = favorite.side === "home" ? homeMargin : -homeMargin;
+    const outcome = handicapOutcome(margin, line, odd);
+    const labels = {
+      "full-win": "Green completo",
+      "half-win": "Meio green",
+      push: "Devolvida",
+      "half-loss": "Meio red",
+      loss: "Red"
+    };
+    return {
+      status: "finished",
+      hit: outcome.hit,
+      score: `${score.home} x ${score.away}`,
+      detail: `${labels[outcome.outcome] || "Resultado"} no handicap ${line}.`,
+      outcome: outcome.outcome,
+      profitUnits: Number(outcome.profitUnits.toFixed(2))
+    };
+  }
+
+  return {
+    status: "finished",
+    hit: null,
+    score: `${score.home} x ${score.away}`,
+    detail: "Mercado sem avaliacao automatica."
+  };
+}
+
+async function buildOver25Signal(event, date) {
+  const [homeLast, awayLast, over25Odd] = await Promise.all([
+    fetchTeamLastFixtures(event.homeTeam?.id, 10),
+    fetchTeamLastFixtures(event.awayTeam?.id, 10),
+    fetchFixtureOver25Odd(event.id).catch(() => null)
+  ]);
+  const homeMetrics = teamRecentMetrics(event.homeTeam?.id, homeLast);
+  const awayMetrics = teamRecentMetrics(event.awayTeam?.id, awayLast);
+  const projected = projectedGoals(homeMetrics, awayMetrics);
+  const prediction = predictMatch(event);
+  const favoriteHome = prediction.probabilities.home >= prediction.probabilities.away
+    && prediction.probabilities.home >= prediction.probabilities.draw;
+  const bttsOk = homeMetrics.bttsRate >= 60 && awayMetrics.bttsRate >= 60;
+  const goalsOk = projected > 2.8;
+  const oddOk = over25Odd === null || (over25Odd >= 1.7 && over25Odd <= 2.1);
+  if (!goalsOk || !favoriteHome || !bttsOk || !oddOk) return null;
+
+  return {
+    date,
+    event,
+    prediction,
+    alert: {
+      team: "Partida",
+      label: "Over 2.5 gols",
+      market: "Over gols",
+      selection: "Over 2.5",
+      marketOdd: over25Odd,
+      fairOdd: over25Odd,
+      minimumOdd: 1.7,
+      probability: Math.min(88, Math.round(projected * 23)),
+      minute: null,
+      score: "pre-jogo",
+      reason: `Media projetada ${projected}, favorito em casa e BTTS forte nos ultimos jogos.`,
+      strategy: "over-25-pre-match",
+      criteria: {
+        projectedGoals: projected,
+        favoriteHome,
+        homeBttsRate: homeMetrics.bttsRate,
+        awayBttsRate: awayMetrics.bttsRate,
+        homeScoredAvg: homeMetrics.scoredAvg,
+        awayScoredAvg: awayMetrics.scoredAvg,
+        oddOk
+      }
+    }
+  };
+}
+
+async function buildUnder25Signal(event, date) {
+  const [homeLast, awayLast, under25Odd] = await Promise.all([
+    fetchTeamLastFixtures(event.homeTeam?.id, 10),
+    fetchTeamLastFixtures(event.awayTeam?.id, 10),
+    fetchFixtureUnder25Odd(event.id).catch(() => null)
+  ]);
+  const [homeShotMetrics, awayShotMetrics] = await Promise.all([
+    teamRecentCornerMetrics(event.homeTeam?.id, homeLast),
+    teamRecentCornerMetrics(event.awayTeam?.id, awayLast)
+  ]);
+  const homeMetrics = teamRecentMetrics(event.homeTeam?.id, homeLast);
+  const awayMetrics = teamRecentMetrics(event.awayTeam?.id, awayLast);
+  const criteria = under25Criteria(event, homeMetrics, awayMetrics, homeShotMetrics, awayShotMetrics, under25Odd);
+  if (criteria.score < 8) return null;
+  const prediction = predictMatch(event);
+
+  return {
+    date,
+    event,
+    prediction,
+    alert: {
+      team: "Partida",
+      label: "Under 2.5 gols",
+      market: "Under gols",
+      selection: "Under 2.5",
+      marketOdd: under25Odd,
+      fairOdd: under25Odd,
+      minimumOdd: 1.7,
+      probability: Math.min(86, criteria.score * 9),
+      minute: null,
+      score: "pre-jogo",
+      reason: `Scanner Under ${criteria.grade}: ${criteria.score}/10 criterios aprovados.`,
+      strategy: "under-25-score",
+      criteria
+    }
+  };
+}
+
+async function buildHandicapSignal(event, date) {
+  const prediction = predictMatch(event);
+  const favorite = handicapFavorite(event, prediction);
+  const [homeLast, awayLast] = await Promise.all([
+    fetchTeamLastFixtures(event.homeTeam?.id, 10),
+    fetchTeamLastFixtures(event.awayTeam?.id, 10)
+  ]);
+  const homeMetrics = teamRecentMetrics(event.homeTeam?.id, homeLast);
+  const awayMetrics = teamRecentMetrics(event.awayTeam?.id, awayLast);
+  const [homeShotMetrics, awayShotMetrics] = await Promise.all([
+    teamRecentCornerMetrics(event.homeTeam?.id, homeLast),
+    teamRecentCornerMetrics(event.awayTeam?.id, awayLast)
+  ]);
+  const favoriteMetrics = favorite.side === "home" ? homeMetrics : awayMetrics;
+  const opponentMetrics = favorite.side === "home" ? awayMetrics : homeMetrics;
+  const favoriteShotMetrics = favorite.side === "home" ? homeShotMetrics : awayShotMetrics;
+  const opponentShotMetrics = favorite.side === "home" ? awayShotMetrics : homeShotMetrics;
+  const scoreInfo = handicapScore(event, favorite, favoriteMetrics, opponentMetrics, favoriteShotMetrics, opponentShotMetrics);
+  const candidateLines = handicapCandidateLines(scoreInfo.score);
+  if (!candidateLines.length) return null;
+
+  let selected = null;
+  for (const line of candidateLines) {
+    const odd = await fetchFixtureAsianHandicapOdd(event.id, favorite.side, line).catch(() => null);
+    if (odd !== null && odd >= 1.85 && odd <= 2.05) {
+      selected = { line, odd };
+      break;
+    }
+  }
+  if (!selected) return null;
+
+  return {
+    date,
+    event,
+    prediction,
+    alert: {
+      team: favorite.team,
+      label: `${favorite.team} Handicap ${selected.line}`,
+      market: "Handicap Asiatico",
+      selection: `AH ${selected.line}`,
+      marketOdd: selected.odd,
+      fairOdd: selected.odd,
+      probability: Math.min(88, scoreInfo.score * 9),
+      minute: null,
+      score: "pre-jogo",
+      reason: `Favorito com nota ${scoreInfo.score}/10. Linha indicada: ${selected.line}.`,
+      strategy: "asian-handicap-score",
+      line: selected.line,
+      favoriteSide: favorite.side,
+      criteria: {
+        favoriteProbability: favorite.probability,
+        score: scoreInfo.score,
+        checks: scoreInfo.checks
+      }
+    },
+    key: String(selected.line).replace(".", "_")
+  };
+}
+
+async function buildCornersSignals(event, date) {
+  const prediction = predictMatch(event);
+  const favoriteHome = prediction.probabilities.home >= prediction.probabilities.away
+    && prediction.probabilities.home >= prediction.probabilities.draw;
+  if (!favoriteHome) return [];
+
+  const [homeLast, awayLast] = await Promise.all([
+    fetchTeamLastFixtures(event.homeTeam?.id, 10),
+    fetchTeamLastFixtures(event.awayTeam?.id, 10)
+  ]);
+  const [homeCorners, awayCorners] = await Promise.all([
+    teamRecentCornerMetrics(event.homeTeam?.id, homeLast),
+    teamRecentCornerMetrics(event.awayTeam?.id, awayLast)
+  ]);
+  const jointCornersAvg = homeCorners.cornersAvg !== null && awayCorners.cornersAvg !== null
+    ? Number((homeCorners.cornersAvg + awayCorners.cornersAvg).toFixed(2))
+    : null;
+  const favoriteShotsAvg = homeCorners.shotsAvg;
+  const cornersOk = jointCornersAvg !== null && jointCornersAvg > 10;
+  const shotsOk = favoriteShotsAvg !== null && favoriteShotsAvg > 10;
+  if (!cornersOk || !shotsOk) return [];
+
+  return [8.5, 9.5, 10.5].map(line => ({
+    date,
+    event,
+    prediction,
+    alert: {
+      team: "Partida",
+      label: `Over ${line} escanteios`,
+      market: "Escanteios",
+      selection: `Over ${line}`,
+      fairOdd: null,
+      marketOdd: null,
+      probability: Math.min(84, Math.round(jointCornersAvg * 7)),
+      minute: null,
+      score: "pre-jogo",
+      reason: `Media conjunta ${jointCornersAvg} escanteios e favorito finaliza bastante.`,
+      strategy: "corners-pre-match",
+      line,
+      criteria: {
+        favoriteHome,
+        jointCornersAvg,
+        favoriteShotsAvg,
+        cornersOk,
+        shotsOk
+      }
+    },
+    key: String(line).replace(".", "_")
+  }));
+}
+
+async function buildMarketSignalsForDate(type, date, sport) {
+  const config = marketSignalTypes[type];
+  if (!config || type === "match-goal") {
+    return { alerts: [], warnings: [] };
+  }
+
+  const events = await fetchApiFootballEvents(date, sport)
+    .then(items => items.map(normalizeEvent).filter(event => !isFinishedEvent(event)));
+  const limited = events.slice(0, 25);
+  const warnings = [];
+  if (events.length > limited.length) {
+    warnings.push(`Amostra limitada: ${limited.length} de ${events.length} jogos foram analisados.`);
+  }
+
+  const analyzed = await mapWithConcurrency(limited, 2, async event => {
+    try {
+      if (config.market === "match-over-goals") return await buildOver25Signal(event, date);
+      if (config.market === "match-under-goals") return await buildUnder25Signal(event, date);
+      if (config.market === "handicap") return await buildHandicapSignal(event, date);
+      if (config.market === "corners") return await buildCornersSignals(event, date);
+      return null;
+    } catch (error) {
+      warnings.push(`${event.id}: ${error.message}`);
+      return null;
+    }
+  });
+
+  const alerts = analyzed
+    .flatMap(item => Array.isArray(item) ? item : item ? [item] : [])
+    .sort((a, b) => Number(b.alert.probability || 0) - Number(a.alert.probability || 0))
+    .map((item, index) => ({ rank: index + 1, ...item }));
+
+  return { alerts, warnings };
+}
+
 async function evaluateRecords(records, eventsById) {
   const fixtureEventsCache = new Map();
+  const fixtureStatsCache = new Map();
   const results = [];
 
   for (const record of records) {
@@ -902,10 +2162,64 @@ async function evaluateRecords(records, eventsById) {
         result = { ...result, greenMinute: record.result?.greenMinute || null };
       }
     }
+    if (record.type === "corners" && isFinishedEvent(currentEvent)) {
+      try {
+        if (!fixtureStatsCache.has(String(record.event.id))) {
+          fixtureStatsCache.set(String(record.event.id), await fetchFixtureStatistics(record.event.id));
+        }
+        const corners = fixtureCornersFromStats(fixtureStatsCache.get(String(record.event.id)));
+        const line = Number(record.alert?.line ?? 8.5);
+        if (corners) {
+          const hit = corners.total > line;
+          result = {
+            status: "finished",
+            hit,
+            score: `${corners.total} escanteios`,
+            detail: hit ? `Over ${line} escanteios confirmado.` : `A partida ficou abaixo de Over ${line} escanteios.`
+          };
+        }
+      } catch {
+        result = record.result || result;
+      }
+    }
     results.push({ record, event: currentEvent, result });
   }
 
   return results;
+}
+
+async function reportResultsForDate(date, sport, type) {
+  const records = await readSignals(date, type);
+  if (!records.length) return { results: [], warning: "" };
+
+  try {
+    const events = await fetchApiFootballEvents(date, sport);
+    const eventsById = new Map(events.map(event => [String(event.id), event]));
+    const evaluatedResults = await evaluateRecords(records, eventsById);
+    const results = evaluatedResults.map(item => ({
+      ...item,
+      result: isFinishedEvent(item.event)
+        ? item.result
+        : item.record.result || item.result
+    }));
+    await saveEvaluatedResults(results);
+    return { results, warning: "" };
+  } catch (error) {
+    const results = records.map(record => ({
+      record,
+      event: record.event,
+      result: record.result || {
+        status: "pending",
+        hit: null,
+        score: "pendente",
+        detail: "Aguardando atualização do jogo."
+      }
+    }));
+    return {
+      results,
+      warning: `${date}: ${error.message}`
+    };
+  }
 }
 
 async function handleApi(req, res, url) {
@@ -927,7 +2241,18 @@ async function handleApi(req, res, url) {
       const events = provider === "sofascore"
         ? await fetchSofascoreEvents(date, sport)
         : await fetchApiFootballEvents(date, sport, { liveOnly });
-      json(res, 200, { source: provider, date, sport, liveOnly, events });
+      let warning = "";
+      if (sport === "football") {
+        try {
+          const liveOdds = await fetchLiveMatchGoalOdds();
+          for (const event of events) {
+            event.liveOver05 = liveOdds.get(String(event.id)) || null;
+          }
+        } catch (error) {
+          warning = `Jogos carregados, mas não foi possível atualizar as odds: ${error.message}`;
+        }
+      }
+      json(res, 200, { source: provider, date, sport, liveOnly, warning, events });
     } catch (error) {
       json(res, 200, {
         source: "demo",
@@ -935,52 +2260,6 @@ async function handleApi(req, res, url) {
         sport,
         warning: `${error.message}. Mostrando jogos de exemplo para manter o sistema operando.`,
         events: demoEvents.map(normalizeEvent)
-      });
-    }
-    return;
-  }
-
-  if (req.method === "GET" && url.pathname === "/api/top-predictions") {
-    const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
-    const sport = url.searchParams.get("sport") || "football";
-    const provider = url.searchParams.get("provider") || "api-football";
-    try {
-      const events = provider === "sofascore"
-        ? await fetchSofascoreEvents(date, sport)
-        : await fetchApiFootballEvents(date, sport);
-      const predictions = events
-        .map(normalizeEvent)
-        .filter(event => !isFinishedEvent(event))
-        .map(event => {
-          const prediction = predictMatch(event);
-          const strongestProbability = Math.max(
-            prediction.probabilities.home,
-            prediction.probabilities.draw,
-            prediction.probabilities.away
-          );
-          return { event, prediction, rankScore: prediction.confidence * 1.4 + strongestProbability };
-        })
-        .sort((a, b) => b.rankScore - a.rankScore)
-        .slice(0, 10)
-        .map(({ event, prediction }, index) => ({ rank: index + 1, event, prediction }));
-
-      await recordPredictions("top10", date, provider, predictions);
-      json(res, 200, { source: provider, date, sport, predictions });
-    } catch (error) {
-      const predictions = demoEvents
-        .map(normalizeEvent)
-        .map(event => ({ event, prediction: predictMatch(event) }))
-        .sort((a, b) => b.prediction.confidence - a.prediction.confidence)
-        .slice(0, 10)
-        .map(({ event, prediction }, index) => ({ rank: index + 1, event, prediction }));
-
-      await recordPredictions("top10", date, "demo", predictions);
-      json(res, 200, {
-        source: "demo",
-        date,
-        sport,
-        warning: `${error.message}. Mostrando previsões de exemplo para manter o sistema operando.`,
-        predictions
       });
     }
     return;
@@ -1039,44 +2318,192 @@ async function handleApi(req, res, url) {
     const sport = url.searchParams.get("sport") || "football";
     const provider = url.searchParams.get("provider") || "api-football";
     try {
-      const events = provider === "sofascore"
-        ? await fetchSofascoreEvents(date, sport)
-        : await fetchApiFootballEvents(date, sport, { liveOnly: true });
+      const [events, liveOdds] = await Promise.all([
+        provider === "sofascore"
+          ? fetchSofascoreEvents(date, sport)
+          : fetchApiFootballEvents(date, sport, { liveOnly: true }),
+        fetchLiveMatchGoalOdds()
+      ]);
       const alerts = events
         .map(normalizeEvent)
         .filter(event => isLiveEvent(event) && !isFinishedEvent(event))
         .map(event => {
           const prediction = predictMatch(event);
-          const alert = liveMatchGoalAlert(event, prediction);
+          const alert = liveMatchGoalAlert(event, prediction, liveOdds.get(String(event.id)));
           return alert ? { event, prediction, alert } : null;
         })
         .filter(Boolean)
         .sort((a, b) => {
           const minuteDiff = b.alert.minute - a.alert.minute;
-          return minuteDiff || a.alert.fairOdd - b.alert.fairOdd;
+          return minuteDiff || b.alert.marketOdd - a.alert.marketOdd;
         })
         .map((item, index) => ({ rank: index + 1, ...item }));
 
       await recordPredictions("match-goal", date, provider, alerts);
       json(res, 200, { source: provider, date, sport, alerts });
     } catch (error) {
-      const alerts = demoEvents
-        .map(normalizeEvent)
-        .map(event => {
-          const prediction = predictMatch(event);
-          const alert = liveMatchGoalAlert(event, prediction);
-          return alert ? { event, prediction, alert } : null;
-        })
-        .filter(Boolean)
-        .map((item, index) => ({ rank: index + 1, ...item }));
-
-      await recordPredictions("match-goal", date, "demo", alerts);
       json(res, 200, {
-        source: "demo",
+        source: provider,
         date,
         sport,
-        warning: `${error.message}. Mostrando alertas de exemplo para manter o sistema operando.`,
+        warning: `${error.message}. Nenhum sinal foi gerado sem a confirmação da odd real.`,
+        alerts: []
+      });
+    }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/market-alerts") {
+    const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
+    const sport = url.searchParams.get("sport") || "football";
+    const provider = url.searchParams.get("provider") || "api-football";
+    const type = url.searchParams.get("type") || "match-goal";
+    const config = marketSignalTypes[type] || marketSignalTypes["match-goal"];
+
+    if (type === "match-goal") {
+      try {
+        const [events, liveOdds] = await Promise.all([
+          provider === "sofascore"
+            ? fetchSofascoreEvents(date, sport)
+            : fetchApiFootballEvents(date, sport, { liveOnly: true }),
+          fetchLiveMatchGoalOdds()
+        ]);
+        const alerts = events
+          .map(normalizeEvent)
+          .filter(event => isLiveEvent(event) && !isFinishedEvent(event))
+          .map(event => {
+            const prediction = predictMatch(event);
+            const alert = liveMatchGoalAlert(event, prediction, liveOdds.get(String(event.id)));
+            return alert ? { event, prediction, alert } : null;
+          })
+          .filter(Boolean)
+          .sort((a, b) => {
+            const minuteDiff = b.alert.minute - a.alert.minute;
+            return minuteDiff || b.alert.marketOdd - a.alert.marketOdd;
+          })
+          .map((item, index) => ({ rank: index + 1, ...item }));
+
+        await recordPredictions("match-goal", date, provider, alerts);
+        json(res, 200, { source: provider, date, sport, type, marketLabel: config.label, alerts });
+      } catch (error) {
+        json(res, 200, {
+          source: provider,
+          date,
+          sport,
+          type,
+          marketLabel: config.label,
+          warning: `${error.message}. Nenhum sinal foi gerado sem a confirmação da odd real.`,
+          alerts: []
+        });
+      }
+      return;
+    }
+
+    try {
+      if (sport !== "football") {
+        throw new Error("Sinais de mercado disponiveis apenas para futebol.");
+      }
+      const { alerts, warnings } = await buildMarketSignalsForDate(type, date, sport);
+      await recordPredictions(type, date, provider, alerts);
+      json(res, 200, {
+        source: provider,
+        date,
+        sport,
+        type,
+        marketLabel: config.label,
+        warning: warnings.length ? `Alguns jogos nao puderam ser analisados: ${warnings.slice(0, 5).join(" | ")}` : "",
         alerts
+      });
+    } catch (error) {
+      json(res, 200, {
+        source: provider,
+        date,
+        sport,
+        type,
+        marketLabel: config.label,
+        warning: `${error.message}. Nenhum sinal foi salvo para este mercado.`,
+        alerts: []
+      });
+    }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/minute-simulator") {
+    const today = new Date().toISOString().slice(0, 10);
+    const startDate = url.searchParams.get("startDate") || url.searchParams.get("date") || today;
+    const endDate = url.searchParams.get("endDate") || startDate;
+    const sport = url.searchParams.get("sport") || "football";
+    const entryMinute = Math.max(1, Math.min(90, Number(url.searchParams.get("minute") || 80)));
+    const market = url.searchParams.get("market") || "match-over-05";
+    const marketConfig = simulatorMarkets[market] || simulatorMarkets["match-over-05"];
+
+    try {
+      if (sport !== "football") {
+        throw new Error("Simulador por minuto disponivel apenas para futebol.");
+      }
+      const dates = reportDates(startDate, endDate);
+      if (dates.length > 14) {
+        throw new Error("Escolha um periodo de ate 14 dias por simulacao. Para meses, rode em blocos e depois consolidamos no banco.");
+      }
+      if (!marketConfig.strategy) {
+        throw new Error(marketConfig.description);
+      }
+
+      const reports = [];
+      for (const date of dates) {
+        if (marketConfig.strategy === "over-25-pre-match") {
+          reports.push(await runOver25SimulationForDate(date, sport));
+        } else if (marketConfig.strategy === "under-25-score") {
+          reports.push(await runUnder25SimulationForDate(date, sport));
+        } else if (marketConfig.strategy === "asian-handicap-score") {
+          reports.push(await runAsianHandicapSimulationForDate(date, sport));
+        } else if (marketConfig.strategy === "corners-pre-match") {
+          reports.push(await runCornersSimulationForDate(date, sport));
+        } else {
+          reports.push(await runMinuteSimulationForDate(date, sport, entryMinute));
+        }
+      }
+      const results = reports.flatMap(report => report.results)
+        .sort((a, b) => `${a.date}:${a.event.startTimestamp}`.localeCompare(`${b.date}:${b.event.startTimestamp}`));
+      const warnings = reports.flatMap(report => report.warnings);
+      if (marketConfig.strategy === "corners-pre-match" && !results.length) {
+        warnings.unshift("Sem entradas porque a API nao retornou estatisticas de escanteios/finalizacoes suficientes para validar a estrategia.");
+      }
+      if (marketConfig.strategy === "under-25-score" && !results.length) {
+        warnings.unshift("Sem entradas: nenhum jogo da amostra atingiu pelo menos 8 de 10 criterios do scanner Under 2.5.");
+      }
+      if (marketConfig.strategy === "asian-handicap-score" && !results.length) {
+        warnings.unshift("Sem entradas: nenhum favorito passou pelos criterios de Handicap Asiatico com odds entre 1.85 e 2.05.");
+      }
+
+      json(res, 200, {
+        source: "api-football",
+        startDate,
+        endDate,
+        date: startDate,
+        period: dates,
+        market,
+        marketLabel: marketConfig.label,
+        description: marketConfig.description,
+        entryMinute,
+        warning: warnings.length ? `Alguns eventos nao puderam ser lidos: ${warnings.slice(0, 5).join(" | ")}` : "",
+        summary: minuteSimulatorSummary(results),
+        results
+      });
+    } catch (error) {
+      json(res, 200, {
+        source: "api-football",
+        startDate,
+        endDate,
+        date: startDate,
+        period: [],
+        market,
+        marketLabel: marketConfig.label,
+        description: marketConfig.description,
+        entryMinute,
+        warning: error.message,
+        summary: minuteSimulatorSummary([]),
+        results: []
       });
     }
     return;
@@ -1084,7 +2511,7 @@ async function handleApi(req, res, url) {
 
   if (req.method === "GET" && url.pathname === "/api/prediction-results") {
     const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
-    const type = url.searchParams.get("type") || "top10";
+    const type = url.searchParams.get("type") || "match-goal";
     const sport = url.searchParams.get("sport") || "football";
     const records = await readSignals(date, type);
 
@@ -1121,31 +2548,35 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === "GET" && url.pathname === "/api/signals-report") {
-    const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
+    const today = new Date().toISOString().slice(0, 10);
+    const startDate = url.searchParams.get("startDate") || url.searchParams.get("date") || today;
+    const endDate = url.searchParams.get("endDate") || startDate;
     const sport = url.searchParams.get("sport") || "football";
-    const type = url.searchParams.get("type") || "";
-    const records = await readSignals(date, type);
+    const type = url.searchParams.get("type") || "match-goal";
 
     try {
-      const events = await fetchApiFootballEvents(date, sport);
-      const eventsById = new Map(events.map(event => [String(event.id), event]));
-      const evaluatedResults = await evaluateRecords(records, eventsById);
-      const results = evaluatedResults.map(item => ({
-        ...item,
-        result: isFinishedEvent(item.event)
-          ? item.result
-          : item.record.result || item.result
-      }));
-      await saveEvaluatedResults(results);
+      const dates = reportDates(startDate, endDate);
+      const reports = [];
+      for (const date of dates) {
+        reports.push(await reportResultsForDate(date, sport, type));
+      }
+      const results = reports.flatMap(report => report.results);
+      const warnings = reports.map(report => report.warning).filter(Boolean);
 
       json(res, 200, {
         source: "firebase",
-        date,
+        date: startDate,
+        startDate,
+        endDate,
+        period: dates,
         type,
+        warning: warnings.length ? `Algumas datas usaram dados salvos: ${warnings.join(" | ")}` : "",
         summary: reportSummary(results),
         results
       });
     } catch (error) {
+      const records = [];
+      const date = startDate;
       const results = records.map(record => ({
         record,
         event: record.event,
@@ -1160,6 +2591,8 @@ async function handleApi(req, res, url) {
       json(res, 200, {
         source: firebaseConfig.projectId ? "firebase" : "historico-local",
         date,
+        startDate,
+        endDate,
         type,
         warning: `${error.message}. Exibindo os dados já salvos no banco.`,
         summary: reportSummary(results),

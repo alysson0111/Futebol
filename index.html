@@ -49,17 +49,24 @@
           </select>
         </label>
         <button id="startedToggle" class="secondary-button" type="button" aria-pressed="false">Ao vivo agora</button>
-        <button id="topPredictionsButton" class="secondary-button highlight-button" type="button">Top 10 IA do dia</button>
         <button id="matchGoalButton" class="secondary-button goal-alert-button" type="button">Partida +0.5 gol</button>
         <label class="compact-label">
           Resultados
           <select id="resultsType">
-            <option value="top10">Top 10 IA</option>
             <option value="match-goal">Partida +0.5 gol</option>
+            <option value="over-25">Over 2.5 gols</option>
+            <option value="under-25">Under 2.5 gols</option>
+            <option value="handicap">Handicap Asiático</option>
+            <option value="corners">Escanteios</option>
           </select>
         </label>
+        <label class="compact-label">
+          Valor aposta
+          <input id="stakeInput" type="number" min="0" step="1" value="10">
+        </label>
         <button id="resultsButton" class="secondary-button" type="button">Ver acertos</button>
-        <button id="reportButton" class="secondary-button" type="button">Relatório da data</button>
+        <button id="reportButton" class="secondary-button" type="button">Relatório por período</button>
+        <button id="minuteSimulatorButton" class="secondary-button" type="button">Simular por minuto</button>
         <button id="loadButton" type="button">Atualizar jogos</button>
       </section>
       <p id="sourceMessage" class="source-message hidden"></p>
@@ -76,10 +83,10 @@
         <section class="analysis-panel">
           <div id="emptyState" class="empty-state">
             <h2>Selecione um confronto</h2>
-            <p>Escolha um confronto ou gere as 10 melhores previsões da data selecionada.</p>
+            <p>Escolha um confronto ou consulte os sinais de Partida +0.5 gol.</p>
           </div>
 
-          <div id="topPredictions" class="top-predictions hidden"></div>
+          <div id="resultsPanel" class="results-panel hidden"></div>
 
           <div id="analysisState" class="hidden">
             <div class="fixture-head">
@@ -117,19 +124,62 @@
       </form>
       <div class="report-dialog-fields">
         <label>
-          Data do relatório
+          Data inicial
           <input id="reportDateInput" type="date">
+        </label>
+        <label>
+          Data final
+          <input id="reportEndDateInput" type="date">
         </label>
         <label>
           Tipo de sinal
           <select id="reportTypeInput">
-            <option value="top10">Top 10 IA</option>
             <option value="match-goal">Partida +0.5 gol</option>
+            <option value="over-25">Over 2.5 gols</option>
+            <option value="under-25">Under 2.5 gols</option>
+            <option value="handicap">Handicap Asiático</option>
+            <option value="corners">Escanteios</option>
           </select>
         </label>
       </div>
       <div class="report-dialog-actions">
         <button id="consultReportButton" type="button">Consultar relatório</button>
+      </div>
+    </dialog>
+    <dialog id="minuteSimulatorDialog" class="report-dialog">
+      <form method="dialog" class="report-dialog-head">
+        <div>
+          <p class="eyebrow">Backtest historico</p>
+          <h2>Simular +0.5 por minuto</h2>
+        </div>
+        <button class="dialog-close" type="submit" aria-label="Fechar">x</button>
+      </form>
+      <div class="report-dialog-fields simulator-fields">
+        <label>
+          Mercado
+          <select id="simulatorMarketInput">
+            <option value="match-over-05">Partida +0.5 gol</option>
+            <option value="match-over-goals">Over gols</option>
+            <option value="match-under-goals">Under gols</option>
+            <option value="handicap">Handicap</option>
+            <option value="corners">Escanteios</option>
+          </select>
+        </label>
+        <label>
+          Data inicial
+          <input id="simulatorStartDateInput" type="date">
+        </label>
+        <label>
+          Data final
+          <input id="simulatorEndDateInput" type="date">
+        </label>
+        <label>
+          Minuto de entrada
+          <input id="simulatorMinuteInput" type="number" min="1" max="90" value="80">
+        </label>
+      </div>
+      <div class="report-dialog-actions">
+        <button id="runMinuteSimulatorButton" type="button">Rodar simulacao</button>
       </div>
     </dialog>
     <script src="./app.js" type="module"></script>
