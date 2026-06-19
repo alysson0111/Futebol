@@ -1019,21 +1019,30 @@ function restoreMarketAlertCounts() {
   syncMarketAlertNav();
 }
 
+function normalizeMarketCount(value) {
+  if (typeof value === "number") {
+    return { finished: 0, total: Math.max(0, value) };
+  }
+  const total = Math.max(0, Number(value?.total || 0));
+  const finished = Math.max(0, Math.min(total, Number(value?.finished || 0)));
+  return { finished, total };
+}
+
 function syncMarketAlertNav() {
   const selectedType = els.resultsType.value || "match-goal";
   for (const tab of els.marketAlertTabs) {
     const type = tab.dataset.marketType;
-    const count = Number(state.marketAlertCounts[type] || 0);
+    const count = normalizeMarketCount(state.marketAlertCounts[type]);
     const badge = tab.querySelector(`[data-market-count="${type}"]`);
-    if (badge) badge.textContent = String(count);
+    if (badge) badge.textContent = `${count.finished}/${count.total}`;
     tab.classList.toggle("active", type === selectedType);
-    tab.classList.toggle("has-signal", count > 0);
-    tab.classList.toggle("blink-alert", count > 0);
+    tab.classList.toggle("has-signal", count.total > 0);
+    tab.classList.toggle("blink-alert", count.total > count.finished);
   }
 }
 
 function updateMarketAlertCount(type, count) {
-  state.marketAlertCounts[type] = Math.max(0, Number(count || 0));
+  state.marketAlertCounts[type] = normalizeMarketCount(count);
   saveMarketAlertCounts();
   syncMarketAlertNav();
 }
@@ -1045,11 +1054,7 @@ async function loadStoredMarketAlertCounts() {
     const response = await fetch(`/api/signal-counts?${params}`);
     const payload = await response.json();
     for (const type of MARKET_TYPES) {
-      const storedCount = Number(payload.counts?.[type] || 0);
-      state.marketAlertCounts[type] = Math.max(
-        Number(state.marketAlertCounts[type] || 0),
-        storedCount
-      );
+      state.marketAlertCounts[type] = normalizeMarketCount(payload.counts?.[type]);
     }
     saveMarketAlertCounts();
     syncMarketAlertNav();
@@ -1061,12 +1066,13 @@ async function loadStoredMarketAlertCounts() {
 function updateMatchGoalButton(count) {
   const selectedType = els.resultsType.value || "match-goal";
   const label = typeLabel(selectedType);
-  els.matchGoalButton.textContent = count > 0
-    ? `${label} (${count})`
+  const normalized = normalizeMarketCount(count);
+  els.matchGoalButton.textContent = normalized.total > 0
+    ? `${label} (${normalized.finished}/${normalized.total})`
     : label;
-  els.matchGoalButton.classList.toggle("blink-alert", count > 0);
-  els.matchGoalButton.classList.toggle("active", count > 0);
-  updateMarketAlertCount(selectedType, count);
+  els.matchGoalButton.classList.toggle("blink-alert", normalized.total > normalized.finished);
+  els.matchGoalButton.classList.toggle("active", normalized.total > 0);
+  updateMarketAlertCount(selectedType, normalized);
 }
 
 async function refreshMatchGoalAlerts(options = {}) {
@@ -1085,7 +1091,12 @@ async function refreshMatchGoalAlerts(options = {}) {
     const response = await fetch(`/api/market-alerts?${params}`);
     const payload = await response.json();
     state.matchGoalAlerts = payload.alerts || [];
-    updateMatchGoalButton(state.matchGoalAlerts.length);
+    const currentCount = normalizeMarketCount(state.marketAlertCounts[els.resultsType.value]);
+    updateMatchGoalButton({
+      finished: currentCount.finished,
+      total: Math.max(currentCount.total, state.matchGoalAlerts.length)
+    });
+    await loadStoredMarketAlertCounts();
     if (payload.warning && !silent) {
       els.sourceMessage.textContent = payload.warning;
       els.sourceMessage.classList.remove("hidden");
@@ -1093,7 +1104,7 @@ async function refreshMatchGoalAlerts(options = {}) {
     return payload;
   } catch {
     state.matchGoalAlerts = [];
-    updateMatchGoalButton(0);
+    updateMatchGoalButton(state.marketAlertCounts[els.resultsType.value] || 0);
     return { source: "erro", date: els.dateInput.value, alerts: [] };
   }
 }
@@ -1108,7 +1119,7 @@ async function showMatchGoalAlerts() {
     els.sourceStatus.textContent = (payload.alerts || []).length ? "Sinais encontrados" : "Sem sinais";
   } finally {
     els.matchGoalButton.disabled = false;
-    updateMatchGoalButton(state.matchGoalAlerts.length);
+    updateMatchGoalButton(state.marketAlertCounts[els.resultsType.value] || 0);
   }
 }
 
@@ -1266,6 +1277,5 @@ els.startedToggle.addEventListener("click", () => {
 els.predictButton.addEventListener("click", predictSelected);
 
 restoreMarketAlertCounts();
-loadStoredMarketAlertCounts();
 loadEvents();
 startAutoRefresh();

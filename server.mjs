@@ -2235,11 +2235,24 @@ async function handleApi(req, res, url) {
   if (req.method === "GET" && url.pathname === "/api/signal-counts") {
     const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
     const records = await readSignals(date);
+    let finishedEventIds = new Set();
+    try {
+      const events = await fetchApiFootballEvents(date, "football");
+      finishedEventIds = new Set(
+        events.filter(event => isFinishedEvent(event)).map(event => String(event.id))
+      );
+    } catch {
+      finishedEventIds = new Set();
+    }
     const counts = Object.fromEntries(
-      Object.keys(marketSignalTypes).map(type => [
-        type,
-        records.filter(record => record.type === type && record.result?.status !== "finished").length
-      ])
+      Object.keys(marketSignalTypes).map(type => {
+        const marketRecords = records.filter(record => record.type === type);
+        const finished = marketRecords.filter(record =>
+          record.result?.status === "finished"
+          || finishedEventIds.has(String(record.event?.id))
+        ).length;
+        return [type, { finished, total: marketRecords.length }];
+      })
     );
     json(res, 200, { date, counts });
     return;
