@@ -1,7 +1,7 @@
 import http from "node:http";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { extname, join, normalize } from "node:path";
+import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cert, getApps, initializeApp } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
@@ -174,7 +174,7 @@ async function readHistory() {
 }
 
 async function saveHistory(history) {
-  await mkdir(join(root, "data"), { recursive: true });
+  await mkdir(dirname(historyFile), { recursive: true });
   await writeFile(historyFile, JSON.stringify(history, null, 2), "utf8");
 }
 
