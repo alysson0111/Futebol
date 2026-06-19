@@ -3,11 +3,13 @@ const state = {
   selected: null,
   liveOnly: true,
   matchGoalAlerts: [],
+  marketAlertCounts: {},
   resultsPayload: null,
   reportPayload: null
 };
 
 const AUTO_REFRESH_MS = 5 * 60 * 1000;
+const MARKET_TYPES = ["match-goal", "over-25", "under-25", "handicap", "corners"];
 
 const els = {
   dateInput: document.querySelector("#dateInput"),
@@ -16,6 +18,7 @@ const els = {
   leagueFilter: document.querySelector("#leagueFilter"),
   startedToggle: document.querySelector("#startedToggle"),
   matchGoalButton: document.querySelector("#matchGoalButton"),
+  marketAlertTabs: [...document.querySelectorAll(".market-alert-tab")],
   resultsType: document.querySelector("#resultsType"),
   stakeInput: document.querySelector("#stakeInput"),
   resultsButton: document.querySelector("#resultsButton"),
@@ -997,13 +1000,73 @@ async function showPredictionResults() {
   }
 }
 
+function saveMarketAlertCounts() {
+  localStorage.setItem("marketAlertCounts", JSON.stringify({
+    date: els.dateInput.value,
+    counts: state.marketAlertCounts
+  }));
+}
+
+function restoreMarketAlertCounts() {
+  try {
+    const saved = JSON.parse(localStorage.getItem("marketAlertCounts") || "{}");
+    state.marketAlertCounts = saved.date === els.dateInput.value && saved.counts
+      ? saved.counts
+      : {};
+  } catch {
+    state.marketAlertCounts = {};
+  }
+  syncMarketAlertNav();
+}
+
+function syncMarketAlertNav() {
+  const selectedType = els.resultsType.value || "match-goal";
+  for (const tab of els.marketAlertTabs) {
+    const type = tab.dataset.marketType;
+    const count = Number(state.marketAlertCounts[type] || 0);
+    const badge = tab.querySelector(`[data-market-count="${type}"]`);
+    if (badge) badge.textContent = String(count);
+    tab.classList.toggle("active", type === selectedType);
+    tab.classList.toggle("has-signal", count > 0);
+    tab.classList.toggle("blink-alert", count > 0);
+  }
+}
+
+function updateMarketAlertCount(type, count) {
+  state.marketAlertCounts[type] = Math.max(0, Number(count || 0));
+  saveMarketAlertCounts();
+  syncMarketAlertNav();
+}
+
+async function loadStoredMarketAlertCounts() {
+  if (els.sportInput.value !== "football") return;
+  try {
+    const params = new URLSearchParams({ date: els.dateInput.value });
+    const response = await fetch(`/api/signal-counts?${params}`);
+    const payload = await response.json();
+    for (const type of MARKET_TYPES) {
+      const storedCount = Number(payload.counts?.[type] || 0);
+      state.marketAlertCounts[type] = Math.max(
+        Number(state.marketAlertCounts[type] || 0),
+        storedCount
+      );
+    }
+    saveMarketAlertCounts();
+    syncMarketAlertNav();
+  } catch {
+    syncMarketAlertNav();
+  }
+}
+
 function updateMatchGoalButton(count) {
-  const label = typeLabel(els.resultsType.value || "match-goal");
+  const selectedType = els.resultsType.value || "match-goal";
+  const label = typeLabel(selectedType);
   els.matchGoalButton.textContent = count > 0
     ? `${label} (${count})`
     : label;
   els.matchGoalButton.classList.toggle("blink-alert", count > 0);
   els.matchGoalButton.classList.toggle("active", count > 0);
+  updateMarketAlertCount(selectedType, count);
 }
 
 async function refreshMatchGoalAlerts(options = {}) {
@@ -1156,10 +1219,27 @@ els.sportInput.addEventListener("change", () => {
   loadEvents();
 });
 els.matchGoalButton.addEventListener("click", showMatchGoalAlerts);
+els.marketAlertTabs.forEach(tab => {
+  tab.addEventListener("click", async () => {
+    const type = tab.dataset.marketType;
+    if (!MARKET_TYPES.includes(type) || els.sportInput.value !== "football") return;
+    els.resultsType.value = type;
+    state.matchGoalAlerts = [];
+    syncMarketAlertNav();
+    updateMatchGoalButton(state.marketAlertCounts[type] || 0);
+    await showMatchGoalAlerts();
+  });
+});
 els.resultsType.addEventListener("change", () => {
   state.matchGoalAlerts = [];
-  updateMatchGoalButton(0);
+  updateMatchGoalButton(state.marketAlertCounts[els.resultsType.value] || 0);
   refreshMatchGoalAlerts({ silent: true });
+});
+els.dateInput.addEventListener("change", () => {
+  state.marketAlertCounts = {};
+  saveMarketAlertCounts();
+  updateMatchGoalButton(0);
+  loadStoredMarketAlertCounts();
 });
 els.resultsButton.addEventListener("click", showPredictionResults);
 els.reportButton.addEventListener("click", openReportDialog);
@@ -1185,5 +1265,7 @@ els.startedToggle.addEventListener("click", () => {
 });
 els.predictButton.addEventListener("click", predictSelected);
 
+restoreMarketAlertCounts();
+loadStoredMarketAlertCounts();
 loadEvents();
 startAutoRefresh();

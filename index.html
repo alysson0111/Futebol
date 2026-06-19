@@ -16,11 +16,22 @@
             <h1>Análise de Jogos</h1>
           </div>
         </div>
-        <div class="top-links" aria-label="Atalhos">
-          <span>Apostas esportivas</span>
-          <span>Ao vivo</span>
-          <span>Previsões</span>
-          <span>Campeonatos</span>
+        <div class="top-links market-alert-nav" aria-label="Alertas por mercado">
+          <button class="market-alert-tab active" type="button" data-market-type="match-goal">
+            <span>Partida +0.5</span><b data-market-count="match-goal">0</b>
+          </button>
+          <button class="market-alert-tab" type="button" data-market-type="over-25">
+            <span>Over 2.5</span><b data-market-count="over-25">0</b>
+          </button>
+          <button class="market-alert-tab" type="button" data-market-type="under-25">
+            <span>Under 2.5</span><b data-market-count="under-25">0</b>
+          </button>
+          <button class="market-alert-tab" type="button" data-market-type="handicap">
+            <span>Handicap</span><b data-market-count="handicap">0</b>
+          </button>
+          <button class="market-alert-tab" type="button" data-market-type="corners">
+            <span>Escanteios</span><b data-market-count="corners">0</b>
+          </button>
         </div>
         <div class="status-pill" id="sourceStatus">Conectando</div>
       </section>
@@ -52,8 +63,8 @@
         <button id="startedToggle" class="secondary-button" type="button" aria-pressed="false">Ao vivo agora</button>
         </div>
         <div class="signals-row">
-        <button id="matchGoalButton" class="secondary-button goal-alert-button" type="button">Partida +0.5 gol</button>
-        <label class="compact-label market-label">
+        <button id="matchGoalButton" class="secondary-button goal-alert-button hidden" type="button">Partida +0.5 gol</button>
+        <label class="compact-label market-label hidden">
           Mercado do sinal
           <select id="resultsType">
             <option value="match-goal">Partida +0.5 gol</option>

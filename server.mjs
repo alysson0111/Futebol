@@ -2232,6 +2232,19 @@ async function handleApi(req, res, url) {
     return;
   }
 
+  if (req.method === "GET" && url.pathname === "/api/signal-counts") {
+    const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
+    const records = await readSignals(date);
+    const counts = Object.fromEntries(
+      Object.keys(marketSignalTypes).map(type => [
+        type,
+        records.filter(record => record.type === type && record.result?.status !== "finished").length
+      ])
+    );
+    json(res, 200, { date, counts });
+    return;
+  }
+
   if (req.method === "GET" && url.pathname === "/api/events") {
     const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
     const sport = url.searchParams.get("sport") || "football";
