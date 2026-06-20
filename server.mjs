@@ -907,15 +907,17 @@ function evaluateRecord(record, currentEvent, greenMinute = null) {
 }
 
 function accuracySummary(results) {
-  const finished = results.filter(item => item.result.status === "finished" && item.result.hit !== null);
-  const hits = finished.filter(item => item.result.hit).length;
+  const settled = results.filter(item => item.result.status === "finished");
+  const graded = settled.filter(item => item.result.hit !== null);
+  const hits = graded.filter(item => item.result.hit).length;
   return {
     total: results.length,
-    finished: finished.length,
-    pending: results.length - finished.length,
+    finished: settled.length,
+    pending: results.length - settled.length,
     hits,
-    misses: finished.length - hits,
-    accuracy: finished.length ? Math.round((hits / finished.length) * 100) : 0
+    misses: graded.length - hits,
+    unavailable: settled.length - graded.length,
+    accuracy: graded.length ? Math.round((hits / graded.length) * 100) : 0
   };
 }
 
@@ -2114,7 +2116,8 @@ async function buildMarketSignalsForDate(type, date, sport) {
 
   const events = await fetchApiFootballEvents(date, sport)
     .then(items => items.map(normalizeEvent).filter(event => !isFinishedEvent(event)));
-  const limited = events.slice(0, 25);
+  const analysisLimit = config.market === "corners" ? 6 : 25;
+  const limited = events.slice(0, analysisLimit);
   const warnings = [];
   if (events.length > limited.length) {
     warnings.push(`Amostra limitada: ${limited.length} de ${events.length} jogos foram analisados.`);
@@ -2139,6 +2142,21 @@ async function buildMarketSignalsForDate(type, date, sport) {
     .map((item, index) => ({ rank: index + 1, ...item }));
 
   return { alerts, warnings };
+}
+
+async function savedMarketAlerts(date, type) {
+  const records = await readSignals(date, type);
+  return records
+    .filter(record => record.event && record.alert)
+    .map((record, index) => ({
+      rank: record.rank || index + 1,
+      event: record.event,
+      prediction: record.prediction,
+      alert: record.alert,
+      result: record.result || null,
+      saved: true
+    }))
+    .sort((a, b) => Number(a.rank || 999) - Number(b.rank || 999));
 }
 
 async function evaluateRecords(records, eventsById) {
@@ -2176,6 +2194,13 @@ async function evaluateRecords(records, eventsById) {
             hit,
             score: `${corners.total} escanteios`,
             detail: hit ? `Over ${line} escanteios confirmado.` : `A partida ficou abaixo de Over ${line} escanteios.`
+          };
+        } else {
+          result = {
+            status: "finished",
+            hit: null,
+            score: result.score,
+            detail: "Jogo finalizado, mas a API-Football nao forneceu as estatisticas de escanteios."
           };
         }
       } catch {
@@ -2431,24 +2456,31 @@ async function handleApi(req, res, url) {
       }
       const { alerts, warnings } = await buildMarketSignalsForDate(type, date, sport);
       await recordPredictions(type, date, provider, alerts);
+      const storedAlerts = await savedMarketAlerts(date, type);
+      const responseAlerts = storedAlerts.length ? storedAlerts : alerts;
       json(res, 200, {
         source: provider,
         date,
         sport,
         type,
         marketLabel: config.label,
-        warning: warnings.length ? `Alguns jogos nao puderam ser analisados: ${warnings.slice(0, 5).join(" | ")}` : "",
-        alerts
+        warning: warnings.length
+          ? `Alguns jogos nao puderam ser analisados: ${warnings.slice(0, 5).join(" | ")}. Exibindo tambem os sinais ja salvos.`
+          : "",
+        alerts: responseAlerts
       });
     } catch (error) {
+      const storedAlerts = await savedMarketAlerts(date, type).catch(() => []);
       json(res, 200, {
         source: provider,
         date,
         sport,
         type,
         marketLabel: config.label,
-        warning: `${error.message}. Nenhum sinal foi salvo para este mercado.`,
-        alerts: []
+        warning: storedAlerts.length
+          ? `${error.message}. Exibindo os sinais ja salvos.`
+          : `${error.message}. Nenhum sinal foi salvo para este mercado.`,
+        alerts: storedAlerts
       });
     }
     return;

@@ -504,7 +504,7 @@ function renderFavoriteGoalAlerts(items, date, source, mode = "favorite") {
         <p class="eyebrow">Alerta ao vivo · ${sourceLabel}</p>
         <h2>${panelTitle}</h2>
       </div>
-      <span>${items.length} jogos</span>
+      <span>${items.length} sinais</span>
     </div>
     <div class="prediction-ranking">
       ${items.map(item => {
@@ -579,6 +579,9 @@ function renderMarketAlerts(items, date, source, mode = "match") {
         const odd = Number(market.marketOdd ?? market.fairOdd);
         const oddText = Number.isFinite(odd) && odd > 0 ? odd.toFixed(2) : "--";
         const minuteText = market.minute ? `${market.minute}'` : "pre-jogo";
+        const resultText = item.result?.status === "finished"
+          ? item.result.hit === null ? "Sem dados da API" : item.result.hit ? "Green" : "Red"
+          : "Resultado pendente";
         return `
           <button class="ranking-card goal-alert-card" type="button" data-event-id="${event.id}">
             <span class="ranking-number">#${item.rank}</span>
@@ -587,6 +590,7 @@ function renderMarketAlerts(items, date, source, mode = "match") {
               <small>${event.tournament?.name || "Competicao"} - ${minuteText} - ${market.score || "sem placar"}</small>
               <em>${market.label || marketLabel}</em>
               <small>${market.reason || "Sinal gerado pelos criterios do mercado."}</small>
+              ${item.saved ? `<small>${resultText}${item.result?.score ? ` - ${item.result.score}` : ""}</small>` : ""}
             </span>
             <span class="ranking-score">
               <b>${oddText}</b>
@@ -630,6 +634,7 @@ function renderPredictionResults(payload) {
       <div><span>Resolvidos</span><b>${summary.finished || 0}</b></div>
       <div><span>Acertos</span><b>${summary.hits || 0}</b></div>
       <div><span>Erros</span><b>${summary.misses || 0}</b></div>
+      <div><span>Sem dados</span><b>${summary.unavailable || 0}</b></div>
       <div><span>Pendentes</span><b>${summary.pending || 0}</b></div>
     </div>
     ${renderBetSimulation(payload.results || [])}
@@ -639,8 +644,9 @@ function renderPredictionResults(payload) {
           const record = item.record;
           const event = item.event;
           const result = item.result;
-          const statusClass = result.status === "pending" ? "pending" : result.hit ? "hit" : "miss";
-          const statusText = result.status === "pending" ? "Pendente" : result.hit ? "Acertou" : "Errou";
+          const unavailable = result.status === "finished" && result.hit === null;
+          const statusClass = result.status === "pending" || unavailable ? "pending" : result.hit ? "hit" : "miss";
+          const statusText = result.status === "pending" ? "Pendente" : unavailable ? "Sem dados" : result.hit ? "Acertou" : "Errou";
           const market = record.type === "favorite-goal" || record.type === "match-goal"
             ? record.alert?.label || "Ao vivo +0.5 gol"
             : record.prediction?.pick || "Previsão";
@@ -740,6 +746,7 @@ function renderSignalsReport(payload) {
       <div><span>Resolvidos</span><b>${summary.finished || 0}</b></div>
       <div><span>Acertos</span><b>${summary.hits || 0}</b></div>
       <div><span>Erros</span><b>${summary.misses || 0}</b></div>
+      <div><span>Sem dados</span><b>${summary.unavailable || 0}</b></div>
       <div><span>Pendentes</span><b>${summary.pending || 0}</b></div>
     </div>
     ${renderBetSimulation(payload.results || [])}
@@ -749,8 +756,9 @@ function renderSignalsReport(payload) {
           const record = item.record;
           const event = item.event;
           const result = item.result;
-          const statusClass = result.status === "pending" ? "pending" : result.hit ? "hit" : "miss";
-          const statusText = result.status === "pending" ? "Pendente" : result.hit ? "Acertou" : "Errou";
+          const unavailable = result.status === "finished" && result.hit === null;
+          const statusClass = result.status === "pending" || unavailable ? "pending" : result.hit ? "hit" : "miss";
+          const statusText = result.status === "pending" ? "Pendente" : unavailable ? "Sem dados" : result.hit ? "Acertou" : "Errou";
           const market = record.alert?.label || typeLabel(record.type);
           return `
             <button class="ranking-card result-card ${statusClass}" type="button" data-record-id="${record.id}">
