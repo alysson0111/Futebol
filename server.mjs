@@ -304,7 +304,7 @@ async function recordPredictions(type, date, source, items) {
     rank: item.rank,
     event: item.event,
     prediction: item.prediction,
-    alert: item.alert || null
+    alert: item.alert ? { ...item.alert, sentAt: item.alert.sentAt || now } : null
   }));
 
   const byId = new Map(history.records.map(record => [record.id, record]));
@@ -314,7 +314,11 @@ async function recordPredictions(type, date, source, items) {
       ...existing,
       ...record,
       createdAt: existing?.createdAt || record.createdAt,
-      sentMinute: existing?.sentMinute ?? existing?.alert?.minute ?? record.sentMinute
+      sentMinute: existing?.sentMinute ?? existing?.alert?.minute ?? record.sentMinute,
+      alert: record.alert ? {
+        ...record.alert,
+        sentAt: existing?.alert?.sentAt || existing?.createdAt || record.alert.sentAt
+      } : null
     });
   }
   history.records = [...byId.values()].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
@@ -735,7 +739,84 @@ function liveFavoriteGoalAlert(event, prediction) {
   };
 }
 
-function liveMatchGoalAlert(event, prediction, liveMarket) {
+function recentPremiumGoalMetrics(teamId, fixtures) {
+  const sample = fixtures.filter(event => isFinishedEvent(event)).slice(0, 10);
+  let failedToScore = 0;
+  let nilNilLastFive = 0;
+
+  for (const [index, event] of sample.entries()) {
+    const score = finalScore(event);
+    if (!score) continue;
+    const isHome = String(event.homeTeam?.id) === String(teamId);
+    const teamGoals = isHome ? score.home : score.away;
+    if (teamGoals === 0) failedToScore += 1;
+    if (index < 5 && score.home === 0 && score.away === 0) nilNilLastFive += 1;
+  }
+
+  return {
+    games: sample.length,
+    failedToScore,
+    nilNilLastFive
+  };
+}
+
+async function premiumOver05Scanner(event) {
+  const [homeLast, awayLast] = await Promise.all([
+    fetchTeamLastFixtures(event.homeTeam?.id, 10),
+    fetchTeamLastFixtures(event.awayTeam?.id, 10)
+  ]);
+  const homeMetrics = teamRecentMetrics(event.homeTeam?.id, homeLast);
+  const awayMetrics = teamRecentMetrics(event.awayTeam?.id, awayLast);
+  const homePremium = recentPremiumGoalMetrics(event.homeTeam?.id, homeLast);
+  const awayPremium = recentPremiumGoalMetrics(event.awayTeam?.id, awayLast);
+  const jointGoalsAverage = Number(((homeMetrics.totalAvg + awayMetrics.totalAvg) / 2).toFixed(2));
+  const estimatedJointXg = projectedGoals(homeMetrics, awayMetrics);
+  const enoughData = homeMetrics.games >= 10 && awayMetrics.games >= 10;
+  const checks = [
+    {
+      key: "scoring",
+      label: "No maximo 1 jogo sem marcar nos ultimos 10",
+      pass: homePremium.failedToScore <= 1 && awayPremium.failedToScore <= 1
+    },
+    {
+      key: "btts",
+      label: "Ambos marcam acima de 55%",
+      pass: homeMetrics.bttsRate > 55 && awayMetrics.bttsRate > 55
+    },
+    {
+      key: "goals-average",
+      label: "Media conjunta superior a 2.5 gols",
+      pass: jointGoalsAverage > 2.5
+    },
+    {
+      key: "xg",
+      label: "xG conjunto estimado acima de 2.3",
+      pass: estimatedJointXg > 2.3
+    },
+    {
+      key: "nil-nil",
+      label: "Nenhum 0x0 nos ultimos 5 jogos",
+      pass: homePremium.nilNilLastFive === 0 && awayPremium.nilNilLastFive === 0
+    }
+  ];
+
+  return {
+    qualifies: enoughData && checks.every(check => check.pass),
+    enoughData,
+    score: checks.filter(check => check.pass).length,
+    homeFailedToScore: homePremium.failedToScore,
+    awayFailedToScore: awayPremium.failedToScore,
+    homeBttsRate: homeMetrics.bttsRate,
+    awayBttsRate: awayMetrics.bttsRate,
+    jointGoalsAverage,
+    estimatedJointXg,
+    homeNilNilLastFive: homePremium.nilNilLastFive,
+    awayNilNilLastFive: awayPremium.nilNilLastFive,
+    checks
+  };
+}
+
+function liveMatchGoalAlert(event, prediction, liveMarket, premiumScanner) {
   if (!isLiveEvent(event) || isFinishedEvent(event)) return null;
 
   const elapsed = Number(event.status?.elapsed || 0);
@@ -764,7 +845,7 @@ function liveMatchGoalAlert(event, prediction, liveMarket) {
     && Number(liveMarket.handicap) === 0.5
     && Number.isFinite(marketOdd);
 
-  if (!isSecondHalfWindow || !isNilNil || !marketAvailable || marketOdd < 1.6) {
+  if (!isSecondHalfWindow || !isNilNil || !marketAvailable || marketOdd < 1.6 || !premiumScanner?.qualifies) {
     return null;
   }
 
@@ -781,8 +862,44 @@ function liveMatchGoalAlert(event, prediction, liveMarket) {
     minute: elapsed,
     score: `${homeScore} x ${awayScore}`,
     totalGoals,
-    reason: "placar 0 x 0 no segundo tempo, buscando o primeiro gol da partida"
+    reason: `placar 0 x 0 no segundo tempo e scanner premium ${premiumScanner.score}/5 aprovado`,
+    premiumScanner
   };
+}
+
+async function buildPremiumMatchGoalAlerts(events, liveOdds) {
+  const generatedAt = new Date().toISOString();
+  const liveEvents = events
+    .map(normalizeEvent)
+    .filter(event => {
+      if (!isLiveEvent(event) || isFinishedEvent(event)) return false;
+      const elapsed = Number(event.status?.elapsed || 0);
+      const isNilNil = Number(event.score?.home || 0) === 0 && Number(event.score?.away || 0) === 0;
+      const liveMarket = liveOdds.get(String(event.id));
+      return elapsed >= 45
+        && elapsed <= 82
+        && isNilNil
+        && liveMarket?.suspended === false
+        && Number(liveMarket?.odd || 0) >= 1.6;
+    });
+  const analyzed = await mapWithConcurrency(liveEvents.slice(0, 20), 3, async event => {
+    try {
+      const prediction = predictMatch(event);
+      const scanner = await premiumOver05Scanner(event);
+      const alert = liveMatchGoalAlert(event, prediction, liveOdds.get(String(event.id)), scanner);
+      return alert ? { event, prediction, alert } : null;
+    } catch {
+      return null;
+    }
+  });
+
+  return analyzed
+    .filter(Boolean)
+    .sort((a, b) => {
+      const minuteDiff = b.alert.minute - a.alert.minute;
+      return minuteDiff || b.alert.marketOdd - a.alert.marketOdd;
+    })
+    .map((item, index) => ({ rank: index + 1, createdAt: generatedAt, ...item }));
 }
 
 function finalScore(event) {
@@ -2154,6 +2271,8 @@ async function savedMarketAlerts(date, type) {
       prediction: record.prediction,
       alert: record.alert,
       result: record.result || null,
+      createdAt: record.createdAt || record.alert?.sentAt || null,
+      sentMinute: record.sentMinute ?? record.alert?.minute ?? null,
       saved: true
     }))
     .sort((a, b) => Number(a.rank || 999) - Number(b.rank || 999));
@@ -2375,20 +2494,7 @@ async function handleApi(req, res, url) {
           : fetchApiFootballEvents(date, sport, { liveOnly: true }),
         fetchLiveMatchGoalOdds()
       ]);
-      const alerts = events
-        .map(normalizeEvent)
-        .filter(event => isLiveEvent(event) && !isFinishedEvent(event))
-        .map(event => {
-          const prediction = predictMatch(event);
-          const alert = liveMatchGoalAlert(event, prediction, liveOdds.get(String(event.id)));
-          return alert ? { event, prediction, alert } : null;
-        })
-        .filter(Boolean)
-        .sort((a, b) => {
-          const minuteDiff = b.alert.minute - a.alert.minute;
-          return minuteDiff || b.alert.marketOdd - a.alert.marketOdd;
-        })
-        .map((item, index) => ({ rank: index + 1, ...item }));
+      const alerts = await buildPremiumMatchGoalAlerts(events, liveOdds);
 
       await recordPredictions("match-goal", date, provider, alerts);
       json(res, 200, { source: provider, date, sport, alerts });
@@ -2419,20 +2525,7 @@ async function handleApi(req, res, url) {
             : fetchApiFootballEvents(date, sport, { liveOnly: true }),
           fetchLiveMatchGoalOdds()
         ]);
-        const alerts = events
-          .map(normalizeEvent)
-          .filter(event => isLiveEvent(event) && !isFinishedEvent(event))
-          .map(event => {
-            const prediction = predictMatch(event);
-            const alert = liveMatchGoalAlert(event, prediction, liveOdds.get(String(event.id)));
-            return alert ? { event, prediction, alert } : null;
-          })
-          .filter(Boolean)
-          .sort((a, b) => {
-            const minuteDiff = b.alert.minute - a.alert.minute;
-            return minuteDiff || b.alert.marketOdd - a.alert.marketOdd;
-          })
-          .map((item, index) => ({ rank: index + 1, ...item }));
+        const alerts = await buildPremiumMatchGoalAlerts(events, liveOdds);
 
         await recordPredictions("match-goal", date, provider, alerts);
         json(res, 200, { source: provider, date, sport, type, marketLabel: config.label, alerts });

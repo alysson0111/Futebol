@@ -582,6 +582,14 @@ function renderMarketAlerts(items, date, source, mode = "match") {
         const resultText = item.result?.status === "finished"
           ? item.result.hit === null ? "Sem dados da API" : item.result.hit ? "Green" : "Red"
           : "Resultado pendente";
+        const scanner = market.premiumScanner;
+        const scannerText = scanner
+          ? `Scanner 5/5 - sem marcar ${scanner.homeFailedToScore}/${scanner.awayFailedToScore} - BTTS ${scanner.homeBttsRate}%/${scanner.awayBttsRate}% - media ${scanner.jointGoalsAverage} - xG est. ${scanner.estimatedJointXg} - 0x0 ${scanner.homeNilNilLastFive}/${scanner.awayNilNilLastFive}`
+          : "";
+        const sentText = formatSignalSentAt(
+          item.createdAt || market.sentAt,
+          item.sentMinute ?? market.minute ?? null
+        );
         return `
           <button class="ranking-card goal-alert-card" type="button" data-event-id="${event.id}">
             <span class="ranking-number">#${item.rank}</span>
@@ -589,7 +597,9 @@ function renderMarketAlerts(items, date, source, mode = "match") {
               <strong>${event.homeTeam?.name || "Mandante"} x ${event.awayTeam?.name || "Visitante"}</strong>
               <small>${event.tournament?.name || "Competicao"} - ${minuteText} - ${market.score || "sem placar"}</small>
               <em>${market.label || marketLabel}</em>
+              <small>${sentText}</small>
               <small>${market.reason || "Sinal gerado pelos criterios do mercado."}</small>
+              ${scannerText ? `<small>${scannerText}</small>` : ""}
               ${item.saved ? `<small>${resultText}${item.result?.score ? ` - ${item.result.score}` : ""}</small>` : ""}
             </span>
             <span class="ranking-score">
@@ -700,17 +710,36 @@ function simulatorMarketLabel(market) {
   return labels[market] || "Mercado";
 }
 
-function signalSentText(record) {
-  const sentMinute = record.sentMinute ?? record.alert?.minute;
-  if (sentMinute !== null && sentMinute !== undefined) {
-    return `Sinal enviado aos ${sentMinute}'`;
+function formatSignalSentAt(createdAt, sentMinute = null) {
+  if (!createdAt) {
+    return sentMinute !== null && sentMinute !== undefined
+      ? `Sinal enviado no minuto ${sentMinute}'`
+      : "Data e hora de envio indisponiveis";
   }
-  if (!record.createdAt) return "Horário de envio indisponível";
+  const sentAt = new Date(createdAt);
+  if (Number.isNaN(sentAt.getTime())) return "Data e hora de envio indisponiveis";
+  const date = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric"
+  }).format(sentAt);
   const time = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo",
     hour: "2-digit",
     minute: "2-digit"
-  }).format(new Date(record.createdAt));
-  return `Sinal enviado às ${time}`;
+  }).format(sentAt);
+  const minuteText = sentMinute !== null && sentMinute !== undefined
+    ? ` · minuto ${sentMinute}'`
+    : "";
+  return `Sinal enviado em ${date} às ${time}${minuteText}`;
+}
+
+function signalSentText(record) {
+  return formatSignalSentAt(
+    record.createdAt || record.alert?.sentAt,
+    record.sentMinute ?? record.alert?.minute ?? null
+  );
 }
 
 function greenMomentText(record, result) {
