@@ -20,6 +20,10 @@ const firebaseConfig = {
   clientEmail: process.env.FIREBASE_CLIENT_EMAIL || "",
   privateKey: (process.env.FIREBASE_PRIVATE_KEY || "").replace(/\\n/g, "\n")
 };
+const telegramConfig = {
+  botToken: process.env.TELEGRAM_BOT_TOKEN || "",
+  chatId: process.env.TELEGRAM_CHAT_ID || ""
+};
 let firestore = null;
 const apiCache = new Map();
 let firebaseStatus = firebaseConfig.projectId && firebaseConfig.clientEmail && firebaseConfig.privateKey
@@ -198,6 +202,110 @@ function firestoreSafe(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function telegramSignalMessage(record) {
+  const event = record.event || {};
+  const alert = record.alert || {};
+  const home = event.homeTeam?.name || "Mandante";
+  const away = event.awayTeam?.name || "Visitante";
+  const competition = event.tournament?.name || "Campeonato nao informado";
+  const odd = Number(alert.marketOdd ?? alert.fairOdd);
+  const minute = Number(alert.minute);
+  const sentAt = alert.sentAt || record.createdAt || new Date().toISOString();
+  const sentDate = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    dateStyle: "short",
+    timeStyle: "short"
+  }).format(new Date(sentAt));
+
+  return [
+    "NOVO SINAL",
+    "",
+    `Mercado: ${alert.label || alert.selection || marketSignalTypes[record.type]?.label || record.type}`,
+    `Jogo: ${home} x ${away}`,
+    `Campeonato: ${competition}`,
+    `Placar: ${alert.score || "pre-jogo"}`,
+    Number.isFinite(minute) && minute > 0 ? `Minuto: ${minute}'` : null,
+    Number.isFinite(odd) && odd > 0 ? `Odd: ${odd.toFixed(2)}` : "Odd: nao disponivel",
+    Number.isFinite(Number(alert.probability)) ? `Confianca: ${Math.round(Number(alert.probability))}%` : null,
+    alert.reason ? `Analise: ${alert.reason}` : null,
+    `Enviado em: ${sentDate}`
+  ].filter(Boolean).join("\n").slice(0, 4096);
+}
+
+function telegramIsConfigured() {
+  return /^\d+:[A-Za-z0-9_-]{20,}$/.test(telegramConfig.botToken)
+    && /^-?\d+$/.test(telegramConfig.chatId);
+}
+
+async function claimTelegramDelivery(record) {
+  const database = getFirebaseDatabase();
+  if (!database) return true;
+
+  const reference = database.collection("signals").doc(encodeURIComponent(record.id));
+  return database.runTransaction(async transaction => {
+    const snapshot = await transaction.get(reference);
+    const saved = snapshot.exists ? snapshot.data() : {};
+    if (saved.telegramSentAt) return false;
+
+    const dispatchStarted = saved.telegramDispatchingAt
+      ? new Date(saved.telegramDispatchingAt).getTime()
+      : 0;
+    if (dispatchStarted && Date.now() - dispatchStarted < 5 * 60_000) return false;
+
+    transaction.set(reference, {
+      telegramDispatchingAt: new Date().toISOString()
+    }, { merge: true });
+    return true;
+  });
+}
+
+async function finishTelegramDelivery(record, result = {}, error = null) {
+  const database = getFirebaseDatabase();
+  if (database) {
+    await database.collection("signals").doc(encodeURIComponent(record.id)).set({
+      telegramDispatchingAt: null,
+      telegramSentAt: error ? null : new Date().toISOString(),
+      telegramMessageId: error ? null : result.message_id || null,
+      telegramError: error ? String(error.message || error).slice(0, 500) : null
+    }, { merge: true });
+  }
+}
+
+async function sendSignalToTelegram(record) {
+  if (!telegramIsConfigured() || !record.alert) return false;
+
+  try {
+    const claimed = await claimTelegramDelivery(record);
+    if (!claimed) return false;
+    const response = await fetch(`https://api.telegram.org/bot${telegramConfig.botToken}/sendMessage`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        chat_id: telegramConfig.chatId,
+        text: telegramSignalMessage(record),
+        disable_web_page_preview: true
+      })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.description || `Telegram respondeu ${response.status}`);
+    }
+    await finishTelegramDelivery(record, payload.result || {});
+    return true;
+  } catch (error) {
+    await finishTelegramDelivery(record, {}, error).catch(() => {});
+    console.error(`Falha ao enviar o sinal ${record.id} ao Telegram:`, error.message);
+    return false;
+  }
+}
+
+async function sendSignalsToTelegram(records) {
+  if (!telegramIsConfigured()) return;
+  for (const record of records) {
+    await sendSignalToTelegram(record);
+  }
+}
+
 async function saveSignalsToFirebase(records) {
   const database = getFirebaseDatabase();
   if (!database || !records.length) return false;
@@ -323,7 +431,9 @@ async function recordPredictions(type, date, source, items) {
   }
   history.records = [...byId.values()].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
   await saveHistory(history);
-  await saveSignalsToFirebase(incoming.map(record => byId.get(record.id)));
+  const savedRecords = incoming.map(record => byId.get(record.id));
+  await saveSignalsToFirebase(savedRecords);
+  await sendSignalsToTelegram(savedRecords);
 }
 
 async function saveEvaluatedResults(results) {
@@ -2367,6 +2477,14 @@ async function reportResultsForDate(date, sport, type) {
 }
 
 async function handleApi(req, res, url) {
+  if (req.method === "GET" && url.pathname === "/api/telegram-status") {
+    json(res, 200, {
+      configured: telegramIsConfigured(),
+      status: telegramIsConfigured() ? "configurado" : "nao configurado"
+    });
+    return;
+  }
+
   if (req.method === "GET" && url.pathname === "/api/firebase-status") {
     json(res, 200, {
       configured: firebaseStatus !== "não configurado",
