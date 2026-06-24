@@ -89,6 +89,17 @@ const marketSignalTypes = {
   }
 };
 
+function saoPauloDateKey(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
 const demoEvents = [
   {
     id: 9001001,
@@ -870,6 +881,56 @@ function recentPremiumGoalMetrics(teamId, fixtures) {
   };
 }
 
+function normalizeApiHockeyGame(item) {
+  const rawStatus = String(item.status?.short || "NS").toUpperCase();
+  const finishedStatuses = ["FT", "AOT", "AP", "CANC", "ABD", "AWD", "WO"];
+  const liveStatuses = ["1P", "2P", "3P", "OT", "BT", "P", "LIVE"];
+  const statusType = rawStatus === "NS"
+    ? "notstarted"
+    : finishedStatuses.includes(rawStatus)
+      ? "finished"
+      : liveStatuses.includes(rawStatus)
+        ? "inprogress"
+        : rawStatus.toLowerCase();
+
+  return {
+    id: item.id,
+    sport: "hockey",
+    startTimestamp: item.timestamp || Math.floor(Date.parse(item.date || "") / 1000),
+    tournament: {
+      id: item.league?.id,
+      name: item.league?.name,
+      category: { name: countryPtBr(item.country?.name) },
+      season: item.league?.season,
+      round: item.week,
+      logo: item.league?.logo
+    },
+    homeTeam: {
+      id: item.teams?.home?.id,
+      name: item.teams?.home?.name,
+      logo: item.teams?.home?.logo
+    },
+    awayTeam: {
+      id: item.teams?.away?.id,
+      name: item.teams?.away?.name,
+      logo: item.teams?.away?.logo
+    },
+    status: {
+      description: item.status?.long,
+      type: statusType,
+      short: rawStatus,
+      elapsed: null
+    },
+    score: {
+      home: item.scores?.home ?? null,
+      away: item.scores?.away ?? null,
+      periods: item.periods || null
+    },
+    venue: null,
+    source: "api-hockey"
+  };
+}
+
 async function premiumOver05Scanner(event) {
   const [homeLast, awayLast] = await Promise.all([
     fetchTeamLastFixtures(event.homeTeam?.id, 10),
@@ -1173,7 +1234,9 @@ async function fetchSofascoreEvents(date, sport) {
   }
 
   const payload = await response.json();
-  return Array.isArray(payload.events) ? payload.events.map(normalizeEvent) : [];
+  return Array.isArray(payload.events)
+    ? payload.events.map(event => ({ ...normalizeEvent(event), sport, source: "sofascore" }))
+    : [];
 }
 
 async function fetchApiFootballEvents(date, sport, options = {}) {
@@ -1207,6 +1270,33 @@ async function fetchApiFootballEvents(date, sport, options = {}) {
   }
 
   return Array.isArray(payload.response) ? payload.response.map(normalizeApiFootballFixture).filter(event => event.id) : [];
+}
+
+async function fetchApiHockeyEvents(date) {
+  if (!apiFootballKey) {
+    throw new Error("Configure API_FOOTBALL_KEY ou APISPORTS_KEY para usar a API-Hockey");
+  }
+
+  const requestUrl = new URL("https://v1.hockey.api-sports.io/games");
+  requestUrl.searchParams.set("date", date);
+  requestUrl.searchParams.set("timezone", "America/Sao_Paulo");
+
+  const payload = await fetchApiJson(requestUrl, {
+    headers: {
+      "accept": "application/json",
+      "x-apisports-key": apiFootballKey
+    }
+  }, 120_000);
+  if (Array.isArray(payload.errors) && payload.errors.length) {
+    throw new Error(`API-Hockey: ${payload.errors.join(", ")}`);
+  }
+  if (payload.errors && typeof payload.errors === "object" && Object.keys(payload.errors).length) {
+    throw new Error(`API-Hockey: ${Object.values(payload.errors).join(", ")}`);
+  }
+
+  return Array.isArray(payload.response)
+    ? payload.response.map(normalizeApiHockeyGame).filter(event => event.id)
+    : [];
 }
 
 async function fetchLiveMatchGoalOdds() {
@@ -2495,7 +2585,7 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === "GET" && url.pathname === "/api/signal-counts") {
-    const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
+    const date = url.searchParams.get("date") || saoPauloDateKey();
     const records = await readSignals(date);
     let finishedEventIds = new Set();
     try {
@@ -2521,15 +2611,23 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === "GET" && url.pathname === "/api/events") {
-    const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
+    const date = url.searchParams.get("date") || saoPauloDateKey();
     const sport = url.searchParams.get("sport") || "football";
     const provider = url.searchParams.get("provider") || "api-football";
     const liveOnly = url.searchParams.get("live") === "all";
     try {
-      const events = provider === "sofascore"
-        ? await fetchSofascoreEvents(date, sport)
-        : await fetchApiFootballEvents(date, sport, { liveOnly });
+      let source = "api-football";
       let warning = "";
+      let events = [];
+      if (provider === "sofascore") {
+        source = "sofascore";
+        events = await fetchSofascoreEvents(date, sport);
+      } else if (sport === "hockey") {
+        source = "api-hockey";
+        events = await fetchApiHockeyEvents(date);
+      } else {
+        events = await fetchApiFootballEvents(date, sport, { liveOnly });
+      }
       if (sport === "football") {
         try {
           const liveOdds = await fetchLiveMatchGoalOdds();
@@ -2540,8 +2638,19 @@ async function handleApi(req, res, url) {
           warning = `Jogos carregados, mas não foi possível atualizar as odds: ${error.message}`;
         }
       }
-      json(res, 200, { source: provider, date, sport, liveOnly, warning, events });
+      json(res, 200, { source, date, sport, liveOnly, warning, events });
     } catch (error) {
+      if (sport !== "football") {
+        json(res, 200, {
+          source: sport === "hockey" ? "api-hockey" : provider,
+          date,
+          sport,
+          liveOnly,
+          warning: `${error.message}. Nenhum evento de outro esporte foi exibido.`,
+          events: []
+        });
+        return;
+      }
       json(res, 200, {
         source: "demo",
         date,
@@ -2554,7 +2663,7 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === "GET" && url.pathname === "/api/favorite-goal-alerts") {
-    const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
+    const date = url.searchParams.get("date") || saoPauloDateKey();
     const sport = url.searchParams.get("sport") || "football";
     const provider = url.searchParams.get("provider") || "api-football";
     try {
@@ -2602,7 +2711,7 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === "GET" && url.pathname === "/api/match-goal-alerts") {
-    const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
+    const date = url.searchParams.get("date") || saoPauloDateKey();
     const sport = url.searchParams.get("sport") || "football";
     const provider = url.searchParams.get("provider") || "api-football";
     try {
@@ -2629,7 +2738,7 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === "GET" && url.pathname === "/api/market-alerts") {
-    const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
+    const date = url.searchParams.get("date") || saoPauloDateKey();
     const sport = url.searchParams.get("sport") || "football";
     const provider = url.searchParams.get("provider") || "api-football";
     const type = url.searchParams.get("type") || "match-goal";
@@ -2698,7 +2807,7 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === "GET" && url.pathname === "/api/minute-simulator") {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = saoPauloDateKey();
     const startDate = url.searchParams.get("startDate") || url.searchParams.get("date") || today;
     const endDate = url.searchParams.get("endDate") || startDate;
     const sport = url.searchParams.get("sport") || "football";
@@ -2779,7 +2888,7 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === "GET" && url.pathname === "/api/prediction-results") {
-    const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
+    const date = url.searchParams.get("date") || saoPauloDateKey();
     const type = url.searchParams.get("type") || "match-goal";
     const sport = url.searchParams.get("sport") || "football";
     const records = await readSignals(date, type);
@@ -2817,7 +2926,7 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === "GET" && url.pathname === "/api/signals-report") {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = saoPauloDateKey();
     const startDate = url.searchParams.get("startDate") || url.searchParams.get("date") || today;
     const endDate = url.searchParams.get("endDate") || startDate;
     const sport = url.searchParams.get("sport") || "football";

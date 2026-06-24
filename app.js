@@ -11,6 +11,17 @@ const state = {
 const AUTO_REFRESH_MS = 5 * 60 * 1000;
 const MARKET_TYPES = ["match-goal", "over-25", "under-25", "handicap", "corners"];
 
+function saoPauloDateKey(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
 const els = {
   dateInput: document.querySelector("#dateInput"),
   sportInput: document.querySelector("#sportInput"),
@@ -222,6 +233,8 @@ function statusLabel(event) {
 function translateStatus(type, description = "") {
   const key = String(type || "").toLowerCase();
   const statusMap = {
+    inprogress: "Ao vivo",
+    finished: "Encerrado",
     notstarted: "Não iniciado",
     ns: "Não iniciado",
     "1h": "1º tempo",
@@ -338,7 +351,7 @@ function renderMatches() {
           ${hasScore(event) ? `<b class="current-score">${scoreText(event)}</b>` : ""}
         </span>
         <small>${formatDate(event.startTimestamp)} · <span class="${isLive(event) ? "live-minute" : ""}">${statusLabel(event)}</span></small>
-        ${isLive(event) ? `
+        ${event.sport === "football" && isLive(event) ? `
           <span class="match-odds ${event.liveOver05 ? "" : "unavailable"}">
             <span>Over 0.5</span>
             <b>${event.liveOver05 ? Number(event.liveOver05.odd).toFixed(2) : "indisponível"}</b>
@@ -1186,6 +1199,7 @@ async function loadEvents(options = {}) {
     }
     const sourceLabels = {
       "api-football": "API-Football conectado",
+      "api-hockey": "API-Hockey conectada",
       sofascore: "SofaScore conectado",
       demo: "Modo demonstração"
     };
@@ -1243,7 +1257,7 @@ async function predictSelected() {
   }
 }
 
-els.dateInput.value = new Date().toISOString().slice(0, 10);
+els.dateInput.value = saoPauloDateKey();
 els.stakeInput.value = localStorage.getItem("simulatedStake") || "10";
 els.startedToggle.setAttribute("aria-pressed", "true");
 els.startedToggle.textContent = "Mostrar todos";
@@ -1251,11 +1265,13 @@ els.startedToggle.classList.add("active");
 els.loadButton.addEventListener("click", loadEvents);
 els.sportInput.addEventListener("change", () => {
   const isFootball = els.sportInput.value === "football";
+  els.searchInput.placeholder = "Time, liga ou pais";
   els.matchGoalButton.disabled = !isFootball;
   els.resultsType.disabled = !isFootball;
   els.resultsButton.disabled = !isFootball;
   els.reportButton.disabled = !isFootball;
   els.minuteSimulatorButton.disabled = !isFootball;
+  els.predictButton.disabled = !isFootball;
 
   if (!isFootball) {
     state.liveOnly = false;
