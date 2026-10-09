@@ -1,202 +1,54 @@
 <!doctype html>
 <html lang="pt-BR">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Análise de Jogos IA</title>
-    <link rel="stylesheet" href="./styles.css">
-  </head>
-  <body>
-    <main class="shell">
-      <section class="topbar">
-        <div class="brand-block">
-          <div class="brand-mark">AV</div>
-          <div>
-            <p class="eyebrow">API-Football + IA preditiva</p>
-            <h1>Análise de Jogos</h1>
-          </div>
-        </div>
-        <div class="top-links market-alert-nav" aria-label="Alertas por mercado">
-          <button class="market-alert-tab active" type="button" data-market-type="match-goal">
-            <span>Partida +0.5</span><b data-market-count="match-goal">0</b>
-          </button>
-          <button class="market-alert-tab" type="button" data-market-type="over-25">
-            <span>Over 2.5</span><b data-market-count="over-25">0</b>
-          </button>
-          <button class="market-alert-tab" type="button" data-market-type="under-25">
-            <span>Under 2.5</span><b data-market-count="under-25">0</b>
-          </button>
-          <button class="market-alert-tab" type="button" data-market-type="handicap">
-            <span>Handicap</span><b data-market-count="handicap">0</b>
-          </button>
-          <button class="market-alert-tab" type="button" data-market-type="corners">
-            <span>Escanteios</span><b data-market-count="corners">0</b>
-          </button>
-        </div>
-        <div class="status-pill" id="sourceStatus">Conectando</div>
-      </section>
-
-      <section class="controls">
-        <div class="filters-row">
-        <label>
-          Data
-          <input id="dateInput" type="date">
-        </label>
-        <label>
-          Esporte
-          <select id="sportInput">
-            <option value="football">Futebol</option>
-            <option value="hockey">Hóquei</option>
-            <option value="volleyball">Vôlei</option>
-          </select>
-        </label>
-        <label>
-          Buscar
-          <input id="searchInput" type="search" placeholder="Time, liga ou país">
-        </label>
-        <label>
-          Campeonato
-          <select id="leagueFilter">
-            <option value="">Todos os campeonatos</option>
-          </select>
-        </label>
-        <button id="startedToggle" class="secondary-button" type="button" aria-pressed="false">Ao vivo agora</button>
-        </div>
-        <div class="signals-row">
-        <button id="matchGoalButton" class="secondary-button goal-alert-button hidden" type="button">Partida +0.5 gol</button>
-        <label class="compact-label market-label hidden">
-          Mercado do sinal
-          <select id="resultsType">
-            <option value="match-goal">Partida +0.5 gol</option>
-            <option value="over-25">Over 2.5 gols</option>
-            <option value="under-25">Under 2.5 gols</option>
-            <option value="handicap">Handicap Asiático</option>
-            <option value="corners">Escanteios</option>
-          </select>
-        </label>
-        <label class="compact-label stake-label">
-          Valor aposta
-          <input id="stakeInput" type="number" min="0" step="1" value="10">
-        </label>
-        <button id="resultsButton" class="secondary-button" type="button">Ver acertos</button>
-        <button id="reportButton" class="secondary-button" type="button">Relatório por período</button>
-        <button id="minuteSimulatorButton" class="secondary-button" type="button">Simular por minuto</button>
-        <button id="loadButton" type="button">Atualizar jogos</button>
-        </div>
-      </section>
-      <p id="sourceMessage" class="source-message hidden"></p>
-
-      <section class="workspace">
-        <aside class="match-list">
-          <div class="section-title">
-            <h2>Jogos</h2>
-            <span id="matchCount">0</span>
-          </div>
-          <div id="matches"></div>
-        </aside>
-
-        <section class="analysis-panel">
-          <div id="emptyState" class="empty-state">
-            <h2>Selecione um confronto</h2>
-            <p>Escolha um confronto ou consulte os sinais de Partida +0.5 gol.</p>
-          </div>
-
-          <div id="resultsPanel" class="results-panel hidden"></div>
-
-          <div id="analysisState" class="hidden">
-            <div class="fixture-head">
-              <div>
-                <p id="leagueName" class="eyebrow"></p>
-                <h2 id="fixtureTitle"></h2>
-                <p id="fixtureMeta"></p>
-              </div>
-              <button id="predictButton" type="button">Gerar previsão</button>
-            </div>
-
-            <div class="inputs-grid">
-              <label>Forma mandante <input id="formHome" type="number" min="0" max="100" placeholder="auto"></label>
-              <label>Forma visitante <input id="formAway" type="number" min="0" max="100" placeholder="auto"></label>
-              <label>Ataque mandante <input id="attackHome" type="number" min="0" max="100" placeholder="auto"></label>
-              <label>Ataque visitante <input id="attackAway" type="number" min="0" max="100" placeholder="auto"></label>
-              <label>Defesa mandante <input id="defenseHome" type="number" min="0" max="100" placeholder="auto"></label>
-              <label>Defesa visitante <input id="defenseAway" type="number" min="0" max="100" placeholder="auto"></label>
-              <label>Desfalques mandante <input id="absencesHome" type="number" min="0" max="12" value="0"></label>
-              <label>Desfalques visitante <input id="absencesAway" type="number" min="0" max="12" value="0"></label>
-            </div>
-
-            <div id="prediction" class="prediction hidden"></div>
-          </div>
-        </section>
-      </section>
-    </main>
-    <dialog id="reportDialog" class="report-dialog">
-      <form method="dialog" class="report-dialog-head">
-        <div>
-          <p class="eyebrow">Relatórios salvos</p>
-          <h2>Consultar sinais</h2>
-        </div>
-        <button class="dialog-close" type="submit" aria-label="Fechar">×</button>
-      </form>
-      <div class="report-dialog-fields">
-        <label>
-          Data inicial
-          <input id="reportDateInput" type="date">
-        </label>
-        <label>
-          Data final
-          <input id="reportEndDateInput" type="date">
-        </label>
-        <label>
-          Tipo de sinal
-          <select id="reportTypeInput">
-            <option value="match-goal">Partida +0.5 gol</option>
-            <option value="over-25">Over 2.5 gols</option>
-            <option value="under-25">Under 2.5 gols</option>
-            <option value="handicap">Handicap Asiático</option>
-            <option value="corners">Escanteios</option>
-          </select>
-        </label>
-      </div>
-      <div class="report-dialog-actions">
-        <button id="consultReportButton" type="button">Consultar relatório</button>
-      </div>
-    </dialog>
-    <dialog id="minuteSimulatorDialog" class="report-dialog">
-      <form method="dialog" class="report-dialog-head">
-        <div>
-          <p class="eyebrow">Backtest historico</p>
-          <h2>Simular +0.5 por minuto</h2>
-        </div>
-        <button class="dialog-close" type="submit" aria-label="Fechar">x</button>
-      </form>
-      <div class="report-dialog-fields simulator-fields">
-        <label>
-          Mercado
-          <select id="simulatorMarketInput">
-            <option value="match-over-05">Partida +0.5 gol</option>
-            <option value="match-over-goals">Over gols</option>
-            <option value="match-under-goals">Under gols</option>
-            <option value="handicap">Handicap</option>
-            <option value="corners">Escanteios</option>
-          </select>
-        </label>
-        <label>
-          Data inicial
-          <input id="simulatorStartDateInput" type="date">
-        </label>
-        <label>
-          Data final
-          <input id="simulatorEndDateInput" type="date">
-        </label>
-        <label>
-          Minuto de entrada
-          <input id="simulatorMinuteInput" type="number" min="1" max="90" value="80">
-        </label>
-      </div>
-      <div class="report-dialog-actions">
-        <button id="runMinuteSimulatorButton" type="button">Rodar simulacao</button>
-      </div>
-    </dialog>
-    <script src="./app.js" type="module"></script>
-  </body>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Central Esportiva</title>
+  <link rel="stylesheet" href="/sports.css">
+</head>
+<body>
+  <header class="header">
+    <div class="brand"><span class="brand-mark">CE</span><div><h1>Central Esportiva</h1><p>Calendário e resultados</p></div></div>
+    <span id="connection" role="status">Conectando</span>
+  </header>
+  <main>
+    <nav id="sports" class="sport-tabs" aria-label="Modalidades">
+      <button data-sport="football" aria-pressed="true">Futebol</button>
+      <button data-sport="tennis" aria-pressed="false">Tênis</button>
+      <button data-sport="eafootball" aria-pressed="false">EA Sports FC/FIFA</button>
+      <button data-sport="basketball" aria-pressed="false">Basquete</button>
+      <button data-sport="nfl" aria-pressed="false">NFL</button>
+    </nav>
+    <section class="filters" aria-label="Filtros de partidas">
+      <label>Data<input id="date" type="date" required></label>
+      <label>Buscar<input id="search" type="search" placeholder="Equipe ou campeonato"></label>
+      <label>Campeonato<select id="league"><option value="">Todos</option></select></label>
+      <label>Situação<select id="phase"><option value="">Todas</option><option value="live">Ao vivo</option><option value="scheduled">Agendados</option><option value="finished">Encerrados</option><option value="other">Outros</option></select></label>
+      <button id="refresh" class="primary" type="button">Atualizar</button>
+      <button id="openReport" type="button">Relatório por período</button>
+    </section>
+    <p id="message" role="status" hidden></p>
+    <section class="summary" aria-label="Resumo do dia">
+      <div><span>Partidas</span><strong id="total">0</strong></div>
+      <div><span>Ao vivo</span><strong id="live">0</strong></div>
+      <div><span>Agendadas</span><strong id="scheduled">0</strong></div>
+      <div><span>Encerradas</span><strong id="finished">0</strong></div>
+      <div class="update"><span>Última atualização</span><strong id="updated">--</strong></div>
+    </section>
+    <section class="workspace">
+      <div class="schedule"><div class="section-title"><h2 id="listTitle">Jogos do dia</h2><span id="count">0 partidas</span></div><div id="games" aria-live="polite"></div></div>
+      <aside id="detail" class="detail" aria-live="polite"><h2>Detalhes da partida</h2><p class="muted">Nenhuma partida selecionada.</p></aside>
+    </section>
+  </main>
+  <dialog id="reportDialog">
+    <form id="reportForm">
+      <div class="section-title"><h2>Relatório de partidas</h2><button id="closeReport" type="button" aria-label="Fechar">Fechar</button></div>
+      <div class="report-filters"><label>Data inicial<input id="startDate" type="date" required></label><label>Data final<input id="endDate" type="date" required></label><button id="generateReport" type="submit" class="primary">Consultar</button></div>
+      <p id="reportStatus" role="status"></p>
+      <div class="report-actions"><button id="csv" type="button" disabled>Exportar CSV</button><button id="print" type="button" disabled>Imprimir / PDF</button></div>
+      <div id="reportContent"></div>
+    </form>
+  </dialog>
+  <script type="module" src="/sports-dashboard.js"></script>
+</body>
 </html>

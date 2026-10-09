@@ -1,0 +1,10 @@
+.env
+.env.*
+.git
+node_modules
+data
+*.log
+firebase-service-account*.json
+*.test.mjs
+app.js
+styles.css

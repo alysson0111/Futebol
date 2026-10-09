@@ -5,6 +5,7 @@ import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cert, getApps, initializeApp } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
+import { getSportsEvents, getSportsDetails, sports, validDate } from "./sports-data.mjs";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 loadLocalEnv(".env");
@@ -2567,6 +2568,36 @@ async function reportResultsForDate(date, sport, type) {
 }
 
 async function handleApi(req, res, url) {
+  if (req.method === "GET" && url.pathname.startsWith("/api/sports/")) {
+    const sport = url.searchParams.get("sport") || "football";
+    if (!sports[sport]) {
+      json(res, 400, { error: "Modalidade invalida." });
+      return;
+    }
+    try {
+      if (url.pathname === "/api/sports/events") {
+        const date = url.searchParams.get("date") || saoPauloDateKey();
+        if (!validDate(date)) {
+          json(res, 400, { error: "Data invalida." });
+          return;
+        }
+        json(res, 200, { sport, date, updatedAt: new Date().toISOString(), ...await getSportsEvents(sport, date) });
+      } else if (url.pathname === "/api/sports/details") {
+        const id = url.searchParams.get("id");
+        if (!/^\d+$/.test(id || "")) {
+          json(res, 400, { error: "Partida invalida." });
+          return;
+        }
+        json(res, 200, await getSportsDetails(sport, id));
+      } else {
+        json(res, 404, { error: "Rota nao encontrada." });
+      }
+    } catch (error) {
+      json(res, 502, { error: error.message, events: [] });
+    }
+    return;
+  }
+
   if (req.method === "GET" && url.pathname === "/api/telegram-status") {
     json(res, 200, {
       configured: telegramIsConfigured(),
@@ -2999,6 +3030,12 @@ async function handleApi(req, res, url) {
 
 async function serveStatic(req, res, url) {
   const requested = url.pathname === "/" ? "/index.html" : decodeURIComponent(url.pathname);
+  const publicFiles = new Set(["/index.html", "/sports-dashboard.js", "/sports.css", "/app.js", "/styles.css"]);
+  if (!publicFiles.has(requested)) {
+    res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+    res.end("Arquivo nao encontrado.");
+    return;
+  }
   const safePath = normalize(requested).replace(/^(\.\.[/\\])+/, "");
   const filePath = join(root, safePath);
 
