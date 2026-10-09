@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { cert, getApps, initializeApp } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 import { getSportsEvents, getSportsDetails, sports, validDate } from "./sports-data.mjs";
+import { analyzeConfrontation } from "./sports-analysis.mjs";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 loadLocalEnv(".env");
@@ -2568,27 +2569,34 @@ async function reportResultsForDate(date, sport, type) {
 }
 
 async function handleApi(req, res, url) {
-  if (req.method === "GET" && url.pathname.startsWith("/api/sports/")) {
+  if ((req.method === "GET" || req.method === "POST") && url.pathname.startsWith("/api/sports/")) {
     const sport = url.searchParams.get("sport") || "football";
     if (!sports[sport]) {
       json(res, 400, { error: "Modalidade invalida." });
       return;
     }
     try {
-      if (url.pathname === "/api/sports/events") {
+      if (req.method === "GET" && url.pathname === "/api/sports/events") {
         const date = url.searchParams.get("date") || saoPauloDateKey();
         if (!validDate(date)) {
           json(res, 400, { error: "Data invalida." });
           return;
         }
         json(res, 200, { sport, date, updatedAt: new Date().toISOString(), ...await getSportsEvents(sport, date) });
-      } else if (url.pathname === "/api/sports/details") {
+      } else if (req.method === "GET" && url.pathname === "/api/sports/details") {
         const id = url.searchParams.get("id");
         if (!/^\d+$/.test(id || "")) {
           json(res, 400, { error: "Partida invalida." });
           return;
         }
         json(res, 200, await getSportsDetails(sport, id));
+      } else if (req.method === "POST" && url.pathname === "/api/sports/analysis") {
+        const id = url.searchParams.get("id");
+        if (!/^\d+$/.test(id || "")) {
+          json(res, 400, { error: "Partida invalida." });
+          return;
+        }
+        json(res, 200, await analyzeConfrontation(sport, id));
       } else {
         json(res, 404, { error: "Rota nao encontrada." });
       }

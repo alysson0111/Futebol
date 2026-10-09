@@ -8,9 +8,11 @@ let events = [];
 let selected = null;
 let loadController;
 let detailController;
+let analysisController;
 let reportController;
 let reportRows = [];
 let reportMeta = null;
+const analysisCache = new Map();
 const escape = value => String(value ?? "").replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
 function today() {
   const parts = new Intl.DateTimeFormat("en", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
@@ -56,8 +58,8 @@ function render() {
     </button>`).join("")}`).join("");
   for (const img of $("games").querySelectorAll("img")) img.addEventListener("error", () => { img.hidden = true; }, { once: true });
 }
-async function api(path, params, signal) {
-  const response = await fetch(`/api/sports/${path}?${new URLSearchParams(params)}`, { signal });
+async function api(path, params, signal, method = "GET") {
+  const response = await fetch(`/api/sports/${path}?${new URLSearchParams(params)}`, { signal, method });
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error || "Não foi possível consultar os dados.");
   return payload;
@@ -65,6 +67,7 @@ async function api(path, params, signal) {
 function resetDetail() {
   selected = null;
   detailController?.abort();
+  analysisController?.abort();
   $("detail").innerHTML = '<h2>Detalhes da partida</h2><p class="muted">Nenhuma partida selecionada.</p>';
 }
 async function load() {
@@ -124,6 +127,7 @@ function statisticsHtml(statistics) {
 }
 async function selectGame(id) {
   detailController?.abort();
+  analysisController?.abort();
   const controller = new AbortController();
   detailController = controller;
   selected = String(id); render();
@@ -131,12 +135,58 @@ async function selectGame(id) {
   try {
     const payload = await api("details", { sport, id }, controller.signal);
     const event = payload.event;
+    const savedAnalysis = analysisCache.get(`${sport}:${id}`);
     const timeline = payload.timeline.map(item => `<li>${escape(item.time?.elapsed ?? "--")}' · ${escape(({ Goal: "Gol", Card: "Cartão", subst: "Substituição", Var: "VAR" })[item.type] || item.type)} · ${escape(item.player?.name || item.team?.name || "")}</li>`).join("");
     $("detail").innerHTML = `<h2>${escape(event.home.name)} × ${escape(event.away.name)}</h2>
       <p class="muted">${escape(event.league.name)}</p><div class="detail-score">${escape(event.score.home ?? "–")} : ${escape(event.score.away ?? "–")}</div>
       <dl class="detail-meta"><dt>Data e hora</dt><dd>${escape(formatted(event.date, true))} · Brasília</dd><dt>Situação</dt><dd>${escape(phaseLabel(event))}</dd><dt>Local</dt><dd>${escape(event.venue || "Não informado")}</dd><dt>Rodada</dt><dd>${escape(event.round || "Não informada")}</dd></dl>
+      <div class="analysis-actions"><button id="analyzeGame" type="button" class="primary">Analisar confronto</button></div><section id="confrontationAnalysis" aria-live="polite">${savedAnalysis ? researchHtml(savedAnalysis) : ""}</section>
       <h3>Estatísticas</h3>${statisticsHtml(payload.statistics)}${timeline ? `<h3>Eventos da partida</h3><ol class="timeline">${timeline}</ol>` : ""}${payload.warning ? `<p class="muted">${escape(payload.warning)}</p>` : ""}`;
   } catch (error) { if (error.name !== "AbortError") $("detail").innerHTML = `<h2>Detalhes da partida</h2><p class="muted">${escape(error.message)}</p>`; }
+}
+function historyHtml(title, stats, teamId) {
+  if (!stats?.matches?.length) return `<h3>${escape(title)}</h3><p class="muted">Nenhum resultado anterior disponível.</p>`;
+  return `<h3>${escape(title)} · ${stats.games} jogos</h3><ol class="history-list">${stats.matches.map(game => {
+    const home = game.home.id === teamId;
+    const scored = home ? game.score.home : game.score.away;
+    const conceded = home ? game.score.away : game.score.home;
+    const outcome = scored > conceded ? "Vitória" : scored === conceded ? "Empate" : "Derrota";
+    return `<li><time>${escape(formatted(game.date, true))}</time><span>${escape(game.home.name)} × ${escape(game.away.name)}</span><strong>${escape(game.score.home)} : ${escape(game.score.away)} · ${outcome}</strong></li>`;
+  }).join("")}</ol>`;
+}
+function researchHtml(payload) {
+  const research = payload.research;
+  const refs = new Map(research.sources.map(source => [source.id, source]));
+  const sections = payload.sections.map(section => `<section class="analysis-section"><h3>${escape(section.title)}</h3><p>${escape(section.text)}</p>${section.sources.length ? `<p class="analysis-references">${section.sources.map(id => `<a href="${escape(refs.get(id)?.url || "#")}" target="_blank" rel="noopener noreferrer">${escape(refs.get(id)?.label || id)}</a>`).join(" · ")}</p>` : ""}</section>`).join("");
+  const h2h = research.h2h.length ? `<h3>Últimos encontros · ${escape(research.h2hScope)}</h3><ol class="history-list">${research.h2h.map(game => `<li><time>${escape(formatted(game.date, true))}</time><span>${escape(game.home.name)} × ${escape(game.away.name)}</span><strong>${escape(game.score.home)} : ${escape(game.score.away)}</strong></li>`).join("")}</ol>` : "";
+  const injuries = research.injuries?.length ? `<h3>Ausências informadas pela fonte</h3><ul class="injury-list">${research.injuries.map(item => `<li><strong>${escape(item.player)}</strong> · ${escape(item.team)}${item.reason ? ` · ${escape(item.reason)}` : ""}</li>`).join("")}</ul>` : "";
+  return `<div class="analysis-heading"><h3>${payload.engine === "ai" ? "Análise informativa por IA" : "Resumo estatístico"}</h3><span>${escape(formatted(payload.generatedAt, true))}</span></div>
+    ${payload.warning ? `<p class="analysis-notice">${escape(payload.warning)}</p>` : ""}${sections}
+    <details class="history-details"><summary>Resultados que fundamentam a análise</summary>${historyHtml(research.event.home.name, research.home?.overall, research.event.home.id)}${historyHtml(research.event.away.name, research.away?.overall, research.event.away.id)}${h2h}${injuries}</details>
+    <p class="analysis-footnote">Fonte: API-Sports. Consulta: ${escape(formatted(research.consultedAt, true))} · Brasília. Histórico limitado à temporada ${escape(research.season ?? "não informada")}, até 10 jogos anteriores por equipe. Vitórias e empates calculados pelo placar final informado, sem gols da disputa de pênaltis.</p>
+    ${research.warnings.length ? `<p class="analysis-notice">Dados incompletos: ${escape(research.warnings.join(" "))}</p>` : ""}`;
+}
+async function analyzeGame() {
+  const id = selected;
+  const currentSport = sport;
+  const target = $("confrontationAnalysis");
+  const button = $("analyzeGame");
+  if (!id || !target || !button) return;
+  analysisController?.abort();
+  const controller = new AbortController();
+  analysisController = controller;
+  button.disabled = true;
+  target.innerHTML = '<p class="muted">Consultando resultados, confrontos diretos e ausências...</p>';
+  try {
+    const payload = await api("analysis", { sport: currentSport, id }, controller.signal, "POST");
+    if (selected === id && sport === currentSport && target.isConnected) {
+      analysisCache.set(`${currentSport}:${id}`, payload);
+      if (analysisCache.size > 20) analysisCache.delete(analysisCache.keys().next().value);
+      target.innerHTML = researchHtml(payload);
+    }
+  } catch (error) {
+    if (error.name !== "AbortError" && target.isConnected) target.innerHTML = `<p class="analysis-notice">${escape(error.message)}</p>`;
+  } finally { if (button.isConnected) button.disabled = false; }
 }
 function datesInRange(start, end) {
   const from = new Date(`${start}T12:00:00Z`), to = new Date(`${end}T12:00:00Z`);
@@ -205,6 +255,7 @@ $("sports").addEventListener("click", event => {
   events = []; $("league").value = ""; $("search").value = ""; resetDetail(); render(); load();
 });
 $("games").addEventListener("click", event => { const button = event.target.closest("button[data-id]"); if (button) selectGame(button.dataset.id); });
+$("detail").addEventListener("click", event => { if (event.target.closest("#analyzeGame")) analyzeGame(); });
 $("openReport").addEventListener("click", () => {
   $("startDate").value = $("endDate").value = $("date").value;
   reportRows = []; $("reportContent").innerHTML = ""; $("reportStatus").textContent = "";
@@ -215,5 +266,5 @@ $("reportDialog").addEventListener("close", () => { reportController?.abort(); $
 $("reportForm").addEventListener("submit", generateReport);
 $("csv").addEventListener("click", exportCsv);
 $("print").addEventListener("click", () => window.print());
-setInterval(() => { if (!document.hidden && !$("reportDialog").open) load(); }, 300000);
+setInterval(() => { if (!document.hidden && !$("reportDialog").open && !$("analyzeGame")?.disabled) load(); }, 300000);
 load();
