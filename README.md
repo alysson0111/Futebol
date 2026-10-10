@@ -1,9 +1,14 @@
 # Sistema de Analise de Jogos
 
-A Central Esportiva agora permite escolher Kalshi (padrao, leitura
-publica sem chave) ou API-Sports no seletor Fonte. Consulte KALSHI.md
-para detalhes, limites, cotacoes e testes. As estrategias de sinais
-anteriores permanecem disponiveis apenas na fonte API-Sports.
+A Central Esportiva agora usa o codigo da referencia
+analise-futebol.vercel.app, copiado em reference/. Consulte REFERENCE.md
+para configuracao, fontes, protecao do banco e limites de confiabilidade.
+Executar: npm install, npm run build, npm start (porta 4173).
+O banco e o leitor das fontes precisam ser configurados antes de enviar
+entradas reais. Nenhuma aposta e executada automaticamente.
+
+As instrucoes abaixo documentam a versao anterior, mantida em server.mjs.
+Kalshi/API-Sports nao sao mais a fonte ativa da interface copiada.
 
 Aplicacao local para carregar jogos da API-Football/API-Sports e gerar previsao do confronto com um modelo local explicavel.
 

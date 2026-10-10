@@ -4,9 +4,16 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node server.mjs"
+    "start": "node reference-server.mjs",
+    "dev": "node reference-server.mjs --dev",
+    "build": "vite build",
+    "preview": "node reference-server.mjs"
   },
   "dependencies": {
-    "firebase-admin": "^14.0.0"
+    "firebase-admin": "^14.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "vite": "^6.0.7",
+    "@vitejs/plugin-react": "^4.3.4"
   }
 }
