@@ -8,7 +8,7 @@
 </head>
 <body>
   <header class="header">
-    <div class="brand"><span class="brand-mark">CE</span><div><h1>Central Esportiva</h1><p>Calendário e resultados</p></div></div>
+    <div class="brand"><span class="brand-mark">CE</span><div><h1>Central Esportiva</h1><p>Mercados Polymarket</p></div></div>
     <span id="connection" role="status">Conectando</span>
   </header>
   <div class="app-layout">
@@ -18,7 +18,7 @@
     <button data-market="over-15" aria-pressed="false">+1.5 gols <span></span></button>
     <button data-market="over-25" aria-pressed="false">+2.5 gols <span></span></button>
     <button data-market="under-25" aria-pressed="false">Under 2.5 <span></span></button>
-    <button data-market="under-35" aria-pressed="false">Under 3.5 IA <span></span></button>
+    <button data-market="under-35" aria-pressed="false">Under 3.5 <span></span></button>
     <button data-market="corners" aria-pressed="false">Escanteios <span></span></button>
     <button data-market="handicap" aria-pressed="false">Handicap <span></span></button>
     <button data-market="ml" aria-pressed="false">ML <span></span></button>
@@ -49,7 +49,7 @@
     </section>
     <section id="scannerPanel" class="scanner-panel" hidden>
       <div class="section-title"><h2 id="scannerTitle">Scanner</h2><button id="scanMarkets" type="button" class="primary">Verificar jogos</button></div>
-      <div class="scanner-controls"><label class="switch-label"><input id="autoSignals" type="checkbox">Envio automático ao Telegram</label><label>Token de envio<input id="scannerToken" type="password" autocomplete="off"></label></div>
+      <div class="scanner-controls"><label class="switch-label"><input id="autoSignals" type="checkbox" disabled>Envio automático indisponível: estratégia pendente</label><label hidden>Token de envio<input id="scannerToken" type="password" autocomplete="off"></label></div>
       <p id="scannerStatus" role="status"></p><div id="scannerResults" aria-live="polite"></div>
     </section>
     <section class="workspace">

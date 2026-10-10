@@ -1,75 +1,47 @@
-# Sistema de Analise de Jogos
+# Central Esportiva - Polymarket
 
-Aplicacao local para carregar jogos da API-Football/API-Sports e gerar previsao do confronto com um modelo local explicavel.
+Dados esportivos exclusivamente das APIs publicas da Polymarket.
+Gamma fornece eventos, horarios, participantes e contratos. CLOB fornece
+as ofertas reais de compra e venda, tamanho disponivel e cotacoes.
+Nao e necessaria chave para leitura. Execute `npm start` e abra
+http://127.0.0.1:4173/.
 
-## Como pegar a chave gratuita
+Modalidades: futebol, tenis, EA Sports FC/FIFA, basquete e NFL, isoladas
+por tags. EA Sports FC usa a categoria esportiva propria, nao a FIFA
+como entidade organizadora do futebol real. Eventos do mesmo jogo sao
+agrupados, incluindo mercados adicionais. Horarios em America/Sao_Paulo.
+A data usa startTime, nunca a criacao do contrato. Consulta paginada,
+limite de 1.000 eventos por modalidade; limite atingido gera aviso.
+Como a API filtra pelo encerramento do contrato, a descoberta abrange o
+dia escolhido e sete dias seguintes, com filtro local pelo inicio real.
+Partidas fora dessa janela de encerramento podem nao aparecer.
 
-1. Acesse https://dashboard.api-football.com/register
-2. Crie uma conta gratuita.
-3. No dashboard, copie sua API key em `Account` > `My Access`.
-4. Crie um arquivo chamado `.env` nesta pasta `outputs`.
-5. Coloque a chave assim:
+Odds equivalentes = 1 / menor oferta de venda (ask), antes de taxas.
+Probabilidade implicita = ask. Referencias Gamma ficam identificadas
+como indicativas e nunca substituem uma oferta CLOB ausente. Cotacoes
+nao garantem execucao por um valor arbitrario; tamanho disponivel e
+regras do contrato sao exibidos. Mercados fechados nao tem cotacao de
+entrada. Nenhuma ordem ou aposta e enviada.
 
-```text
-API_FOOTBALL_KEY=sua_chave_aqui
-```
+Scanners mostram somente contratos existentes: totais de gols exatos,
+Under/Over, escanteios da partida, spreads e moneyline. Contratos de
+primeiro tempo, segundo tempo ou totais de uma equipe nao substituem
+o mercado da partida. Spreads nao sao automaticamente handicap asiatico.
+O envio automatico esta bloqueado: a Polymarket nao substitui o historico
+de finalizacoes/xG dos scanners anteriores, e precos nao demonstram EV+
+ou confiabilidade independente. E necessario definir/validar novas
+estrategias antes de reativar sinais.
 
-O plano gratuito da API-Football oferece 100 requisicoes por dia. Isso e suficiente para testar e desenvolver.
+Historicos locais e Firebase sao preservados sem recalcular resultados
+com a nova fonte. A rota /api/signals-report permite leitura por periodo.
+Firebase/Telegram conservam suas configuracoes. Integracoes antigas e
+suas rotas de dados foram removidas. O arquivo legado app.js, que possui
+uma alteracao local anterior, nao e servido nem incluido na publicacao.
 
-## Salvar sinais no Firebase
+Documentacao oficial:
+- https://docs.polymarket.com/api-reference/events/list-events
+- https://docs.polymarket.com/api-reference/market-data/get-order-book
+- https://docs.polymarket.com/api-reference/wss/sports
 
-O sistema pode gravar cada sinal na colecao `signals` do Cloud Firestore. Os documentos
-usam um ID fixo por mercado, data e jogo, evitando sinais duplicados. Quando os resultados
-sao conferidos, o mesmo documento recebe o status de acerto, erro ou pendente.
-
-1. Crie um projeto em https://console.firebase.google.com/
-2. Ative `Firestore Database`.
-3. Abra `Configuracoes do projeto` > `Contas de servico`.
-4. Clique em `Gerar nova chave privada` e abra o JSON baixado.
-5. Adicione ao arquivo `.env`:
-
-```text
-FIREBASE_PROJECT_ID=valor_de_project_id
-FIREBASE_CLIENT_EMAIL=valor_de_client_email
-FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nCONTEUDO_DA_CHAVE\n-----END PRIVATE KEY-----\n"
-```
-
-Nao coloque esse arquivo JSON dentro do projeto e nao envie a chave privada para o navegador.
-Para conferir a conexao, abra:
-
-```text
-http://127.0.0.1:4173/api/firebase-status
-```
-
-## Como rodar
-
-```powershell
-cd C:\Users\HP\Documents\Codex\2026-05-30\montar-um-sistema-de-analise-de\outputs
-npm start
-```
-
-Depois acesse:
-
-```text
-http://127.0.0.1:4173
-```
-
-## Fonte dos jogos
-
-Por padrao o sistema usa:
-
-```text
-https://v3.football.api-sports.io/fixtures?date=YYYY-MM-DD&timezone=America/Sao_Paulo
-```
-
-A autenticacao usa o header oficial:
-
-```text
-x-apisports-key: SUA_CHAVE
-```
-
-Se a chave nao estiver configurada, ou se a cota gratuita acabar, o painel entra em modo demonstracao e mostra jogos de exemplo para manter a previsao funcionando.
-
-## Modelo de previsao
-
-A analise considera forma, ataque, defesa, mando de campo, desfalques e variacao por competicao. O resultado mostra probabilidades 1X2, placar provavel, mercados uteis e alertas de risco.
+Testes: `node --test polymarket.test.mjs scanner-route.test.mjs`.
+Publicacao no GitHub/Vercel somente quando solicitada.

@@ -12,12 +12,11 @@ let analysisController;
 let reportController;
 let reportRows = [];
 let reportMeta = null;
-const analysisCache = new Map();
 let activeMarket = 'general';
 let scannerController;
 let scannerCursor = 0;
 const scannerResults = new Map();
-const marketLabels = { 'over-05': '+0.5 gols', 'over-15': '+1.5 gols', 'over-25': '+2.5 gols', 'under-25': 'Under 2.5', 'under-35': 'Under 3.5 IA', corners: 'Escanteios', handicap: 'Handicap', ml: 'ML' };
+const marketLabels = { 'over-05': '+0.5 gols', 'over-15': '+1.5 gols', 'over-25': '+2.5 gols', 'under-25': 'Under 2.5', 'under-35': 'Under 3.5', corners: 'Escanteios', handicap: 'Handicap', ml: 'ML' };
 const escape = value => String(value ?? "").replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
 function today() {
   const parts = new Intl.DateTimeFormat("en", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
@@ -29,7 +28,7 @@ function formatted(value, date = false) {
 }
 function phaseLabel(event) {
   const label = statuses[event.status] || phases[event.phase];
-  return event.phase === "live" && event.elapsed != null ? `${event.elapsed}${event.sport === "football" ? "'" : ""} · ${label}` : label;
+  return event.phase === "live" && event.elapsed ? `${event.elapsed} · ${label}` : label;
 }
 function logo(team) {
   let url;
@@ -58,7 +57,7 @@ function render() {
   $("games").innerHTML = [...groups.values()].map(group => `<h3 class="league-heading">${escape(group[0].league.name)}${group[0].league.country ? ` · ${escape(group[0].league.country)}` : ""}</h3>${group.sort((a, b) => String(a.date).localeCompare(String(b.date))).map(event => `
     <button class="game" data-id="${escape(event.id)}" aria-pressed="${String(event.id) === selected}" aria-label="${escape(`${event.home.name} contra ${event.away.name}`)}">
       <span><time>${escape(formatted(event.date))}</time><span class="game-status ${event.phase === "live" ? "live-status" : ""}">${escape(phaseLabel(event))}</span></span>
-      <span class="teams"><span class="team">${logo(event.home)}${escape(event.home.name)}</span><span class="team">${logo(event.away)}${escape(event.away.name)}</span></span>
+      <span class="teams"><span class="team">${logo(event.home)}${escape(event.home.name)}</span><span class="team">${logo(event.away)}${escape(event.away.name)}</span><span class="reference-odds">${escape(referenceOdds(event))}</span></span>
       <span class="score"><span>${escape(event.score.home ?? "–")}</span><span>${escape(event.score.away ?? "–")}</span></span>
     </button>`).join("")}`).join("");
   for (const img of $("games").querySelectorAll("img")) img.addEventListener("error", () => { img.hidden = true; }, { once: true });
@@ -92,7 +91,7 @@ async function load() {
     const leagues = new Map(events.map(event => [String(event.league.id ?? event.league.name), event.league.name]));
     $("league").innerHTML = '<option value="">Todos</option>' + [...leagues].sort((a, b) => a[1].localeCompare(b[1])).map(([id, name]) => `<option value="${escape(id)}">${escape(name)}</option>`).join("");
     if (leagues.has(previousLeague)) $("league").value = previousLeague;
-    $("connection").textContent = payload.available ? "API-Sports" : "Fonte pendente";
+    $("connection").textContent = payload.available ? "Polymarket" : "Fonte pendente";
     $("updated").textContent = payload.available ? formatted(payload.updatedAt) : "--";
     if (payload.warning) { $("message").textContent = payload.warning; $("message").hidden = false; }
     render();
@@ -141,13 +140,12 @@ async function selectGame(id) {
   try {
     const payload = await api("details", { sport, id }, controller.signal);
     const event = payload.event;
-    const savedAnalysis = analysisCache.get(`${sport}:${id}`);
     const timeline = payload.timeline.map(item => `<li>${escape(item.time?.elapsed ?? "--")}' · ${escape(({ Goal: "Gol", Card: "Cartão", subst: "Substituição", Var: "VAR" })[item.type] || item.type)} · ${escape(item.player?.name || item.team?.name || "")}</li>`).join("");
     $("detail").innerHTML = `<h2>${escape(event.home.name)} × ${escape(event.away.name)}</h2>
       <p class="muted">${escape(event.league.name)}</p><div class="detail-score">${escape(event.score.home ?? "–")} : ${escape(event.score.away ?? "–")}</div>
       <dl class="detail-meta"><dt>Data e hora</dt><dd>${escape(formatted(event.date, true))} · Brasília</dd><dt>Situação</dt><dd>${escape(phaseLabel(event))}</dd><dt>Local</dt><dd>${escape(event.venue || "Não informado")}</dd><dt>Rodada</dt><dd>${escape(event.round || "Não informada")}</dd></dl>
-      <div class="analysis-actions"><button id="analyzeGame" type="button" class="primary">Analisar confronto</button></div><section id="confrontationAnalysis" aria-live="polite">${savedAnalysis ? researchHtml(savedAnalysis) : ""}</section>
-      <h3>Estatísticas</h3>${statisticsHtml(payload.statistics)}${timeline ? `<h3>Eventos da partida</h3><ol class="timeline">${timeline}</ol>` : ""}${payload.warning ? `<p class="muted">${escape(payload.warning)}</p>` : ""}`;
+      <a href="${escape(event.url)}" target="_blank" rel="noopener noreferrer">Confronto na Polymarket</a>
+      <div class="analysis-actions"><button id="analyzeGame" type="button" class="primary">Atualizar cotações</button></div><section id="confrontationAnalysis" aria-live="polite">${researchHtml(payload)}</section>`;
   } catch (error) { if (error.name !== "AbortError") $("detail").innerHTML = `<h2>Detalhes da partida</h2><p class="muted">${escape(error.message)}</p>`; }
 }
 function historyHtml(title, stats, teamId) {
@@ -160,17 +158,17 @@ function historyHtml(title, stats, teamId) {
     return `<li><time>${escape(formatted(game.date, true))}</time><span>${escape(game.home.name)} × ${escape(game.away.name)}</span><strong>${escape(game.score.home)} : ${escape(game.score.away)} · ${outcome}</strong></li>`;
   }).join("")}</ol>`;
 }
+function decimal(value) { return Number.isFinite(value) ? value.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '--'; }
+function outcomeLabel(value) { return ({ Yes: 'Sim', No: 'Não', Over: 'Acima', Under: 'Abaixo', Draw: 'Empate' })[value] || value; }
+function referenceOdds(event) {
+  const entries = (event.markets || []).filter(market => market.type === 'moneyline' && !market.closed).flatMap(market => market.outcomes.filter(outcome => outcome.label !== 'No' && outcome.referencePrice > 0 && outcome.referencePrice < 1).map(outcome => `${outcome.label === 'Yes' ? market.title : outcomeLabel(outcome.label)}: ${decimal(1 / outcome.referencePrice)}`)).slice(0, 3);
+  return entries.length ? `Odds indicativas · ${entries.join(' · ')}` : '';
+}
 function researchHtml(payload) {
-  const research = payload.research;
-  const refs = new Map(research.sources.map(source => [source.id, source]));
-  const sections = payload.sections.map(section => `<section class="analysis-section"><h3>${escape(section.title)}</h3><p>${escape(section.text)}</p>${section.sources.length ? `<p class="analysis-references">${section.sources.map(id => `<a href="${escape(refs.get(id)?.url || "#")}" target="_blank" rel="noopener noreferrer">${escape(refs.get(id)?.label || id)}</a>`).join(" · ")}</p>` : ""}</section>`).join("");
-  const h2h = research.h2h.length ? `<h3>Últimos encontros · ${escape(research.h2hScope)}</h3><ol class="history-list">${research.h2h.map(game => `<li><time>${escape(formatted(game.date, true))}</time><span>${escape(game.home.name)} × ${escape(game.away.name)}</span><strong>${escape(game.score.home)} : ${escape(game.score.away)}</strong></li>`).join("")}</ol>` : "";
-  const injuries = research.injuries?.length ? `<h3>Ausências informadas pela fonte</h3><ul class="injury-list">${research.injuries.map(item => `<li><strong>${escape(item.player)}</strong> · ${escape(item.team)}${item.reason ? ` · ${escape(item.reason)}` : ""}</li>`).join("")}</ul>` : "";
-  return `<div class="analysis-heading"><h3>${payload.engine === "ai" ? "Análise informativa por IA" : "Resumo estatístico"}</h3><span>${escape(formatted(payload.generatedAt, true))}</span></div>
-    ${payload.warning ? `<p class="analysis-notice">${escape(payload.warning)}</p>` : ""}${sections}
-    <details class="history-details"><summary>Resultados que fundamentam a análise</summary>${historyHtml(research.event.home.name, research.home?.overall, research.event.home.id)}${historyHtml(research.event.away.name, research.away?.overall, research.event.away.id)}${h2h}${injuries}</details>
-    <p class="analysis-footnote">Fonte: API-Sports. Consulta: ${escape(formatted(research.consultedAt, true))} · Brasília. Histórico limitado à temporada ${escape(research.season ?? "não informada")}, até 10 jogos anteriores por equipe. Vitórias e empates calculados pelo placar final informado, sem gols da disputa de pênaltis.</p>
-    ${research.warnings.length ? `<p class="analysis-notice">Dados incompletos: ${escape(research.warnings.join(" "))}</p>` : ""}`;
+  const markets = payload.event.markets || [];
+  return `<div class="analysis-heading"><h3>Cotações Polymarket</h3><span>${escape(formatted(payload.updatedAt || payload.generatedAt, true))}</span></div>${payload.warning ? `<p class="analysis-notice">${escape(payload.warning)}</p>` : ''}
+    ${markets.length ? markets.map(market => `<section class="quote-market"><h3>${escape(market.title)}</h3><p class="muted">${market.closed ? 'Mercado encerrado' : market.active ? 'Livro de ofertas aberto' : 'Mercado indisponível'} · Liquidez: US$ ${decimal(market.liquidity)} · ${market.feesEnabled ? 'Taxas aplicáveis' : 'Consulte taxas do contrato'}</p><div class="table-scroll"><table><thead><tr><th>Resultado</th><th>Compra US$</th><th>Odd equivalente</th><th>Prob. implícita</th><th>Cotas na oferta</th></tr></thead><tbody>${market.outcomes.map(outcome => `<tr><td>${escape(outcomeLabel(outcome.label))}</td><td>${decimal(outcome.quote?.ask)}</td><td>${decimal(outcome.quote?.odd)}</td><td>${percentage(outcome.quote?.impliedProbability)}</td><td>${decimal(outcome.quote?.availableShares)}</td></tr>`).join('')}</tbody></table></div><details><summary>Regras do contrato e preços de referência</summary><p class="contract-rules">${escape(market.description)}</p><p>${market.outcomes.map(outcome => `${escape(outcomeLabel(outcome.label))}: ${decimal(outcome.referencePrice)}`).join(' · ')}</p><p class="muted">Referência Gamma: ${escape(formatted(market.updatedAt, true))}</p></details></section>`).join('') : '<p class="muted">Nenhum mercado disponível.</p>'}
+    <p class="analysis-footnote">Odd equivalente = 1 / preço da oferta de compra, antes de taxas. Probabilidade implícita não é previsão independente. Sem oferta CLOB, a odd permanece indisponível.</p>`;
 }
 async function analyzeGame() {
   const id = selected;
@@ -182,12 +180,10 @@ async function analyzeGame() {
   const controller = new AbortController();
   analysisController = controller;
   button.disabled = true;
-  target.innerHTML = '<p class="muted">Consultando resultados, confrontos diretos e ausências...</p>';
+  target.innerHTML = '<p class="muted">Consultando cotações da Polymarket...</p>';
   try {
     const payload = await api("analysis", { sport: currentSport, id }, controller.signal, "POST");
     if (selected === id && sport === currentSport && target.isConnected) {
-      analysisCache.set(`${currentSport}:${id}`, payload);
-      if (analysisCache.size > 20) analysisCache.delete(analysisCache.keys().next().value);
       target.innerHTML = researchHtml(payload);
     }
   } catch (error) {
@@ -237,7 +233,7 @@ async function generateReport(event) {
   } catch (error) { if (error.name !== "AbortError") $("reportStatus").textContent = error.message; }
   finally { if (reportController === controller) $("generateReport").disabled = false; }
 }
-function sportsAvailable(value) { return ["football", "basketball", "nfl"].includes(value); }
+function sportsAvailable(value) { return Object.hasOwn(labels, value); }
 function exportCsv() {
   const cell = value => {
     let text = String(value ?? "");
@@ -266,19 +262,19 @@ function renderScanner() {
   $('scannerResults').innerHTML = records.map(row => {
     const event = row.event;
     const entries = row.assessments?.length ? row.assessments : row.signals;
-    return `<article class="scanner-result"><h3>${escape(event ? `${event.home.name} × ${event.away.name}` : row.gameName)}</h3><p class="muted">${escape(formatted(row.checkedAt, true))} · Brasília</p>${entries.map(item => `<div class="market-assessment ${item.approved ? 'approved' : ''}"><strong>${escape(item.team || 'Partida')} · ${escape(item.selection)}</strong><span>Odd ${escape(Number(item.odd).toFixed(2))} ${escape(item.bookmaker || '')}</span><span>Frequência histórica: ${percentage(item.rate)}${item.sample != null ? ` · ${item.hits}/${item.sample} jogos` : ''}</span><span>Intervalo de 95%: ${percentage(item.lower)} a ${percentage(item.upper)}</span><strong>${item.approved ? 'Sinal aprovado pelo filtro' : 'Não aprovado'}</strong></div>`).join('')}<p class="muted">${escape(row.reason)}</p>${row.warnings.length ? `<p class="analysis-notice">${escape(row.warnings.join(' | '))}</p>` : ''}${row.delivery?.map(item => `<p>${escape(item.selection)}: ${escape(item.status)}${item.error ? ` · ${escape(item.error)}` : ''}</p>`).join('') || ''}</article>`;
+    return `<article class="scanner-result"><h3>${escape(event ? `${event.home.name} × ${event.away.name}` : row.gameName)}</h3><p class="muted">${escape(formatted(row.checkedAt, true))} · Brasília</p>${entries.map(item => `<div class="market-assessment"><strong>${escape(item.selection)}</strong><span>Odd equivalente: ${decimal(item.odd)}</span><span>Probabilidade implícita: ${percentage(item.impliedProbability)}</span><span>Cotas na oferta: ${decimal(item.quote?.availableShares)}</span><strong>${item.odd ? 'Cotação CLOB confirmada · sem sinal aprovado' : 'Sem oferta de compra confirmada'}</strong></div>`).join('')}<p class="muted">${escape(row.reason)}</p>${row.warnings.length ? `<p class="analysis-notice">${escape(row.warnings.join(' | '))}</p>` : ''}</article>`;
   }).join('');
 }
 async function scanMarkets() {
   if (activeMarket === 'general' || $('scanMarkets').disabled) return;
-  if (sport !== 'football') { $('scannerStatus').textContent = 'Estratégias disponíveis apenas para futebol. Nenhum sinal de outra modalidade será misturado.'; return; }
+  if ((activeMarket.startsWith('over-') || activeMarket.startsWith('under-') || activeMarket === 'corners') && !['football', 'eafootball'].includes(sport)) { $('scannerStatus').textContent = 'Este mercado de gols/escanteios é exclusivo de futebol ou EA Sports FC.'; return; }
   scannerController?.abort();
   const controller = new AbortController(); scannerController = controller;
   const market = activeMarket, date = $('date').value;
   const send = $('autoSignals').checked;
   const token = $('scannerToken').value.trim();
   if (send && !token) { $('scannerStatus').textContent = 'Informe o token de envio para habilitar o Telegram.'; return; }
-  const candidates = visibleEvents().filter(event => market === 'over-05' ? event.phase === 'live' && event.score.home === 0 && event.score.away === 0 : event.phase === 'scheduled' && new Date(event.date) > new Date());
+  const candidates = visibleEvents().filter(event => market === 'over-05' ? event.phase === 'live' && event.score.home === 0 && event.score.away === 0 : event.phase !== 'finished');
   if (!candidates.length) { $('scannerStatus').textContent = 'Nenhum jogo elegível para os filtros atuais.'; return; }
   if (scannerCursor >= candidates.length) scannerCursor = 0;
   const batch = candidates.slice(scannerCursor, scannerCursor + 3);
@@ -288,19 +284,19 @@ async function scanMarkets() {
       $('scannerStatus').textContent = `Verificando ${scannerCursor + index + 1}/${candidates.length}: ${game.home.name} × ${game.away.name}`;
       let payload;
       try {
-        const response = await fetch(`/api/scanner?${new URLSearchParams({ market, id: game.id })}`, { method: send ? 'POST' : 'GET', signal: controller.signal, headers: send ? { Authorization: `Bearer ${token}` } : {} });
+        const response = await fetch(`/api/scanner?${new URLSearchParams({ market, id: game.id, sport })}`, { method: send ? 'POST' : 'GET', signal: controller.signal, headers: send ? { Authorization: `Bearer ${token}` } : {} });
         payload = await response.json();
         if (!response.ok) throw new Error(payload.error || 'Falha na consulta.');
       } catch (error) {
         if (error.name === 'AbortError') throw error;
         payload = { market, event: game, signals: [], warnings: [error.message], checkedAt: new Date().toISOString(), reason: 'Sem confirmação: nenhum sinal aprovado.' };
       }
-      if (activeMarket !== market || sport !== 'football' || $('date').value !== date) return;
+      if (activeMarket !== market || $('date').value !== date) return;
       payload.gameName = `${game.home.name} × ${game.away.name}`;
       scannerResults.set(`${market}:${game.id}`, payload); renderScanner();
     }
     scannerCursor += batch.length;
-    $('scannerStatus').textContent = `Lote concluído: ${batch.length} jogos verificados; ${scannerCursor}/${candidates.length} percorridos. ${send ? 'Envio habilitado.' : 'Telegram desativado.'}`;
+    $('scannerStatus').textContent = `Lote concluído: ${batch.length} jogos verificados; ${scannerCursor}/${candidates.length} percorridos. Fonte: Polymarket.`;
   } catch (error) { if (error.name !== 'AbortError') $('scannerStatus').textContent = error.message; }
   finally { if (scannerController === controller) $('scanMarkets').disabled = false; }
 }

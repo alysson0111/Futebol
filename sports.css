@@ -1,5 +1,12 @@
 :root { font-family: Arial, sans-serif; color: #17343c; background: #f1f4f5; font-size: 14px; letter-spacing: 0; }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
+.reference-odds { font-size: 11px; color: #59727b; line-height: 1.6; overflow-wrap: anywhere; }
+.quote-market { padding: 16px 0; border-bottom: 1px solid #d2dfe2; }
+.quote-market h3 { font-size: 15px; line-height: 1.5; }
+.quote-market table { min-width: 420px; }
+.quote-market details { margin-top: 12px; line-height: 1.6; }
+.contract-rules { white-space: pre-line; overflow-wrap: anywhere; font-size: 12px; }
 body { margin: 0; }
 .app-layout { display: grid; grid-template-columns: 210px minmax(0, 1fr); }
 .app-layout main { width: 100%; min-width: 0; }
