@@ -106,7 +106,7 @@ export function SearchBar({ dateStart, setDateStart, dateEnd, setDateEnd, liveIn
   );
 }
 
-export function SignalsReport({ signals, bankStatus, changeSignalResult, removeSignal, dateStart, dateEnd }) {
+export function SignalsReport({ signals, bankStatus, changeSignalResult, removeSignal, dateStart, dateEnd, onRefreshResults, canRefreshResults }) {
   const [reportMarket, setReportMarket] = useState("all");
   const filteredSignals = useMemo(() => {
     return signals.filter(signal => {
@@ -196,6 +196,7 @@ export function SignalsReport({ signals, bankStatus, changeSignalResult, removeS
             <p className="subtitle">{bankStatus}</p>
           </div>
           <div className="report-actions">
+            <button className="btn" onClick={onRefreshResults} disabled={!canRefreshResults}>Atualizar resultados</button>
             <select
               className="report-select"
               value={reportMarket}

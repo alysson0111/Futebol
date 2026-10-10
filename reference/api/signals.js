@@ -220,7 +220,7 @@ function parseForebetMatchScore(markdown) {
 
 
 
-async function settleSignalsFromTotalCorner(db, signals, cursor = 0) {
+export async function settleSignalsFromTotalCorner(db, signals, cursor = 0) {
   const pending = signals.filter((signal) => signal.id && !signal.finalConfirmed && (signal.result === "pendente" || !isFinishedGame(signal)));
   if (!pending.length) return { signals, settlement: { updated: 0, errors: [], nextCursor: 0 } };
 
@@ -233,6 +233,7 @@ async function settleSignalsFromTotalCorner(db, signals, cursor = 0) {
     rowResults.forEach((result, index) => {
       if (result.status === "rejected") settlementStatus.errors.push(`${plan.dates[index]}: ${result.reason?.message || "Falha ao buscar resultado"}`);
       else if (!result.value.length) settlementStatus.errors.push(`${plan.dates[index]}: fonte sem jogos legiveis`);
+      else (result.value.coverageErrors || []).forEach(error => settlementStatus.errors.push(`${plan.dates[index]}: ${error}`));
     });
     const totalCornerRows = rowResults.flatMap((result) => result.status === "fulfilled" ? result.value : []);
     games = analyzeFixtures({ response: totalCornerRowsToFixtures(uniqueRows(totalCornerRows)) });
@@ -262,7 +263,20 @@ async function settleSignalsFromTotalCorner(db, signals, cursor = 0) {
     await batch.commit();
   }
   settlementStatus.updated = updates.size;
+  settlementStatus.pendingChecked = pending.length;
+  settlementStatus.unresolved = pending.length - updates.size;
   return { signals: signals.map((signal) => updates.has(signal.id) ? { ...signal, ...updates.get(signal.id) } : signal), settlement: settlementStatus };
+}
+
+export async function readPendingSignals(db, cursor = '') {
+  let query = db.collection(SIGNAL_COLLECTION).where('result', '==', 'pendente').orderBy('__name__').limit(1000);
+  if (/^[a-zA-Z0-9_-]{1,128}$/.test(cursor)) query = query.startAfter(cursor);
+  let snapshot = await query.get();
+  if (!snapshot.size && cursor) snapshot = await db.collection(SIGNAL_COLLECTION).where('result', '==', 'pendente').orderBy('__name__').limit(1000).get();
+  return {
+    signals: snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })),
+    nextCursor: snapshot.size === 1000 ? snapshot.docs.at(-1).id : ''
+  };
 }
 
 export async function readSignalSync(db, params) {
@@ -295,9 +309,13 @@ async function listSignals(req, res) {
     return send(res, 400, { error: "Data de sincronizacao invalida." });
   }
   const { signals, syncToken } = await readSignalSync(db, params);
+  // Recovery must not depend on the browser retaining every pending signal.
+  const pending = await readPendingSignals(db, params.get('pendingCursor') || '');
+  const records = new Map(signals.map(signal => [signal.id, signal]));
+  pending.signals.forEach(signal => records.set(signal.id, signal));
   const cursor = params.get("cursor");
-  const payload = await settleSignalsFromTotalCorner(db, signals, cursor);
-  send(res, 200, { ...payload, syncToken, limit: SIGNALS_READ_LIMIT });
+  const payload = await settleSignalsFromTotalCorner(db, [...records.values()], cursor);
+  send(res, 200, { ...payload, syncToken, pendingCursor: pending.nextCursor, limit: SIGNALS_READ_LIMIT });
 }
 
 async function saveSignal(req, res) {

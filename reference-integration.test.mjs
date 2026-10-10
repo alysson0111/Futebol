@@ -1,9 +1,31 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { generateKeyPairSync } from 'node:crypto';
+import { deleteApp, getApps } from 'firebase-admin/app';
+import { getDb, now } from './reference/api/_lib/firebase.js';
 import handler from './reference-server.mjs';
 import { deliverEntry } from './reference/api/_lib/telegram.js';
 import { analyzeFixtures, publicGame } from './reference/api/_lib/scanner.js';
 const response = () => ({ setHeader() {}, end(body) { this.body = JSON.parse(body); } });
+
+test('Firebase initializes through the installed modular Admin API without network writes', async () => {
+  const names = ['FIREBASE_PROJECT_ID', 'FIREBASE_CLIENT_EMAIL', 'FIREBASE_PRIVATE_KEY'];
+  const old = names.map(name => process.env[name]);
+  const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048, privateKeyEncoding: { type: 'pkcs8', format: 'pem' }, publicKeyEncoding: { type: 'spki', format: 'pem' } });
+  process.env.FIREBASE_PROJECT_ID = 'test-project';
+  process.env.FIREBASE_CLIENT_EMAIL = 'test@test-project.iam.gserviceaccount.com';
+  process.env.FIREBASE_PRIVATE_KEY = privateKey.replace(/\n/g, '\\n');
+  try {
+    const db = getDb();
+    assert.equal(db.projectId, 'test-project');
+    assert.equal(getDb(), db);
+    assert.equal(typeof now().isEqual, 'function');
+  } finally {
+    const app = getApps().find(entry => entry.name === 'central-reference');
+    if (app) await deleteApp(app);
+    names.forEach((name, index) => { if (old[index] === undefined) delete process.env[name]; else process.env[name] = old[index]; });
+  }
+});
 test('all bank operations require a server token, including GET settlement', async () => {
   const old = process.env.SCANNER_ACCESS_TOKEN;
   process.env.SCANNER_ACCESS_TOKEN = 'test-access-token';
@@ -42,6 +64,10 @@ test('Telegram is tested with a mock only and never includes odds or secrets in 
       return { ok: true, json: async () => ({ ok: true, result: { message_id: 3 } }) };
     };
     assert.equal((await deliverEntry(record)).status, 'enviado');
+    globalThis.fetch = async () => ({ok:false,status:400,json:async()=>({ok:false,error_code:400,description:'Bad Request: chat not found'})});
+    assert.match((await deliverEntry(record)).error, /Chat nao encontrado/);
+    globalThis.fetch = async () => ({ok:false,status:401,json:async()=>({ok:false,error_code:401,description:'Unauthorized test-token'})});
+    assert.match((await deliverEntry(record)).error, /Token do bot invalido/);
     globalThis.fetch = async () => { throw new Error('secret-test-token'); };
     assert.equal((await deliverEntry(record)).error.includes('test-token'), false);
   } finally {

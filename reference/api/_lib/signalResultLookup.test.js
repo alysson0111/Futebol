@@ -2,9 +2,40 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { selectResultDates, findResultGame } from "./signalResultLookup.js";
 import { mergeReportSignals } from "../../src/analysis/reportSignals.js";
-import { parseTotalCornerMarkdown, totalCornerRowsToFixtures, fetchTotalCornerDate } from "./totalCorner.js";
+import { parseTotalCornerMarkdown, totalCornerRowsToFixtures, fetchTotalCornerDate, resultPageLinks } from "./totalCorner.js";
 import { analyzeFixtures } from "./scanner.js";
 import { buildFinalSignalUpdate } from "../../src/analysis/signalSettlement.js";
+
+test('dated recovery follows explicit pagination only for the requested date', async () => {
+  const original=globalThis.fetch;
+  let calls=0;
+  try {
+    globalThis.fetch=async url=>{calls++;return {ok:true,text:async()=>calls===1?'# Match Schedule\n2026-10-10\nLiga A\n08:00 Integral A 1 - 0 B\n[2](https://www.totalcorner.com/pt/match/schedule/20261010?page=2)':'# Match Schedule\n2026-10-10\nLiga B\n09:00 Integral C 0 - 2 D'};};
+    const rows=await fetchTotalCornerDate('2026-10-10');
+    assert.equal(calls,2);
+    assert.equal(rows.length,2);
+    assert.equal(rows[1].home,'C');
+    assert.deepEqual(resultPageLinks('[2](https://evil.example/pt/match/schedule/20261010?page=2) [3](https://www.totalcorner.com/pt/match/schedule/20261009?page=3)','2026-10-10'),[]);
+  } finally {globalThis.fetch=original;}
+});
+
+test('saved status/card prefixes cannot hide the final result of the same dated teams', () => {
+  const signal={dateText:'10/10/2026',market:'over05',home:"1ºT ' 1 1  Obolon Kyiv",away:'FC Kryvbas',league:'Liga'};
+  const game={...signal,home:'Obolon Kyiv',apiStatus:'FT',scoreText:'1x0'};
+  assert.equal(findResultGame(signal,[game]),game);
+  assert.equal(buildFinalSignalUpdate(signal,game).result,'green');
+});
+
+test('a failed additional page preserves confirmed results and reports incomplete coverage', async () => {
+  const original=globalThis.fetch;
+  let calls=0;
+  try {
+    globalThis.fetch=async()=>{calls++;return calls===1?{ok:true,text:async()=> '# Match Schedule\n2026-10-10\nLiga A\n08:00 Integral A 1 - 0 B\n[2](https://www.totalcorner.com/pt/match/schedule/20261010?page=2)'}:{ok:false,status:401};};
+    const rows=await fetchTotalCornerDate('2026-10-10');
+    assert.equal(rows.length,1);
+    assert.match(rows.coverageErrors[0],/401/);
+  } finally {globalThis.fetch=original;}
+});
 
 test("all historical pending dates are revisited, including signals saved before kickoff", () => {
   const signals = ["10/10/2026", "09/10/2026", "08/10/2026", "07/10/2026", "06/10/2026", "05/10/2026", "04/10/2026"].map((dateText) => ({ dateText, liveStatus: "NS" }));

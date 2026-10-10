@@ -17,13 +17,14 @@ export function selectResultDates(signals, cursor = 0, today = new Date().toLoca
 }
 
 function normalize(value) {
-  return String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return String(value || "").replace(/^(?:1[ºo]T|2[ºo]T|HT|FT)\s+(?:['’\d]\s*)*/i, '').normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
 export function findResultGame(signal, games) {
   const candidates = games.filter((game) => game.dateText === signal.dateText && game.market === signal.market);
   const sameSource = candidates.filter((game) => game.sourceId === signal.sourceId);
   const sameTeams = candidates.filter((game) => normalize(game.home) === normalize(signal.home) && normalize(game.away) === normalize(signal.away));
-  const matches = sameSource.length ? sameSource : sameTeams;
+  const sameLeague = sameTeams.filter(game => normalize(game.league) === normalize(signal.league));
+  const matches = sameSource.length ? sameSource : sameLeague.length ? sameLeague : sameTeams;
   return matches.find(isFinishedGame) || matches[0] || null;
 }

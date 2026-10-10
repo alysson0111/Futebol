@@ -40,8 +40,10 @@ export function getSettlementOutcome(signal, game) {
     return outcome(match[1].toLowerCase() === "under" ? -margin : margin);
   }
   if (market === "ml" || market.includes("moneyline")) {
-    if (!["home", "away", "draw"].includes(signal.mlPick)) return null;
-    return outcome(signal.mlPick === (home > away ? "home" : away > home ? "away" : "draw") ? 1 : -1);
+    const savedPicks = [...new Set((signal.signalLines || []).map(line => String(line).match(/^(?:SINAL\s*\|\s*)?ML\s+(Casa|Fora|Empate)\b/i)?.[1]?.toLowerCase()).filter(Boolean))];
+    const pick = signal.mlPick || (savedPicks.length === 1 ? {casa:'home',fora:'away',empate:'draw'}[savedPicks[0]] : '');
+    if (!["home", "away", "draw"].includes(pick)) return null;
+    return outcome(pick === (home > away ? "home" : away > home ? "away" : "draw") ? 1 : -1);
   }
   if (market.includes("handicap")) {
     const line = savedHandicap(signal);

@@ -357,6 +357,18 @@ export function mergeTotalCornerRows(rows, totalCornerRows) {
   });
 }
 
+export function resultPageLinks(markdown, dateIso) {
+  const base = new URL(totalCornerDateUrl(dateIso));
+  const links = new Set();
+  for (const match of String(markdown).matchAll(/\]\((https:\/\/www\.totalcorner\.com\/[^\s)]+)\)/g)) {
+    const url = new URL(match[1]);
+    if (url.origin !== base.origin || !(url.pathname === base.pathname || url.pathname.startsWith(base.pathname + '/'))) continue;
+    const suffix = url.pathname.slice(base.pathname.length);
+    if ((suffix && /^\/(?:page[:/]?)?\d+\/?$/.test(suffix)) || [...url.searchParams.keys()].some(key => /^(page|p|offset)$/i.test(key))) links.add(url.href);
+  }
+  return [...links].slice(0, 8);
+}
+
 async function fetchTotalCornerPage(url, expectedDate) {
   const response = await fetch(readerUrl(url), {
     signal: AbortSignal.timeout(20000),
@@ -375,13 +387,30 @@ async function fetchTotalCornerPage(url, expectedDate) {
   if (expectedDate && !pageDates.includes(expectedDate)) {
     throw new Error(`TotalCorner nao confirmou a data ${expectedDate} na pagina de resultados.`);
   }
-  return parseTotalCornerMarkdown(markdown);
+  return { rows: parseTotalCornerMarkdown(markdown), pages: expectedDate ? resultPageLinks(markdown, expectedDate) : [] };
 }
 
 export async function fetchTotalCornerToday() {
-  return fetchTotalCornerPage(TOTALCORNER_TODAY_URL);
+  return (await fetchTotalCornerPage(TOTALCORNER_TODAY_URL)).rows;
 }
 
 export async function fetchTotalCornerDate(dateIso) {
-  return (await fetchTotalCornerPage(totalCornerDateUrl(dateIso), dateIso)).map((row) => ({ ...row, dateIso }));
+  const first = await fetchTotalCornerPage(totalCornerDateUrl(dateIso), dateIso);
+  const rows = [...first.rows];
+  const errors = [];
+  const visited = new Set([totalCornerDateUrl(dateIso)]);
+  let pages = first.pages;
+  while (pages.length && visited.size <= 8) {
+    const batch = pages.filter(url => !visited.has(url)).slice(0, Math.min(4, 9 - visited.size));
+    if (!batch.length) break;
+    batch.forEach(url => visited.add(url));
+    const responses = await Promise.allSettled(batch.map(url => fetchTotalCornerPage(url, dateIso)));
+    const results = responses.filter(result => result.status === 'fulfilled').map(result => result.value);
+    responses.filter(result => result.status === 'rejected').forEach(result => errors.push(result.reason?.message || 'Falha em pagina adicional de resultados.'));
+    results.forEach(page => rows.push(...page.rows));
+    pages = [...pages, ...results.flatMap(page => page.pages)].filter(url => !visited.has(url));
+  }
+  const output = rows.map((row) => ({ ...row, dateIso }));
+  output.coverageErrors = errors;
+  return output;
 }

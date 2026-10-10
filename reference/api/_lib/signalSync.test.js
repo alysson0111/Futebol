@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readSignalSync } from "../signals.js";
+import { readSignalSync, readPendingSignals } from "../signals.js";
 import { selectPendingSignalIds } from "../../src/analysis/reportSignals.js";
 
 test("report polls read changes and at most twenty pending records, not the entire bank", async () => {
@@ -42,4 +42,23 @@ test("pending rotation revisits every signal and skips confirmed results", () =>
   }
   assert.equal(visited.size, 45);
   assert.equal(visited.has("final"), false);
+});
+
+test('server recovery reads pending records independently of browser IDs and rotates full pages', async () => {
+  const calls = [];
+  const docs = Array.from({length:1000},(_,i)=>({id:`id${i}`,data:()=>({result:'pendente'})}));
+  const query = { where(...args){calls.push(args);return this;}, orderBy(...args){calls.push(args);return this;},limit(n){assert.equal(n,1000);return this;},startAfter(value){calls.push(['cursor',value]);return this;},async get(){return {docs,size:docs.length};} };
+  const result = await readPendingSignals({collection:()=>query}, 'previous');
+  assert.equal(result.signals.length,1000);
+  assert.equal(result.nextCursor,'id999');
+  assert.deepEqual(calls[0],['result','==','pendente']);
+  assert.ok(calls.some(call=>call[0]==='cursor'));
+});
+
+test('server recovery wraps around when the last pending page has disappeared', async () => {
+  let reads=0;
+  const query = {where(){return this;},orderBy(){return this;},limit(){return this;},startAfter(){return this;},async get(){reads++;return reads===1?{docs:[],size:0}:{docs:[{id:'old',data:()=>({result:'pendente'})}],size:1};}};
+  const result=await readPendingSignals({collection:()=>query},'deleted-last');
+  assert.equal(result.signals[0].id,'old');
+  assert.equal(result.nextCursor,'');
 });

@@ -1,4 +1,10 @@
 import test from "node:test";
+test('legacy ML recovers only the original saved pick, never a new prediction', () => {
+  const game = { apiStatus:'FT', scoreText:'0x2' };
+  assert.equal(buildFinalSignalUpdate({market:'ml',signalLines:['ML Fora (Visitante)']},game).result,'green');
+  assert.equal(buildFinalSignalUpdate({market:'ml',signalLines:['ML Casa (Mandante)']},game).result,'red');
+  assert.equal(buildFinalSignalUpdate({market:'ml',signalLines:['ML Casa','ML Fora']},game),null);
+});
 import assert from "node:assert/strict";
 import { buildFinalSignalUpdate, getSettlementOutcome } from "./signalSettlement.js";
 import { calculateReport } from "./scoreUtils.js";

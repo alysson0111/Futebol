@@ -1,4 +1,5 @@
-import admin from "firebase-admin";
+import { cert, getApps, initializeApp } from "firebase-admin/app";
+import { FieldValue, getFirestore } from "firebase-admin/firestore";
 
 let app;
 
@@ -12,8 +13,8 @@ export function getDb() {
       throw new Error("Firebase Admin nao configurado no servidor.");
     }
 
-    app = admin.apps.find((entry) => entry.name === 'central-reference') || admin.initializeApp({
-      credential: admin.credential.cert({
+    app = getApps().find((entry) => entry.name === 'central-reference') || initializeApp({
+      credential: cert({
         projectId,
         clientEmail,
         privateKey
@@ -21,9 +22,9 @@ export function getDb() {
     }, 'central-reference');
   }
 
-  return admin.firestore(app);
+  return getFirestore(app);
 }
 
 export function now() {
-  return admin.firestore.FieldValue.serverTimestamp();
+  return FieldValue.serverTimestamp();
 }

@@ -170,6 +170,7 @@ export default function App() {
   const [liveInterval, setLiveInterval] = useState(300000);
   const [accessToken, setAccessToken] = useState('');
   const [autoSave, setAutoSave] = useState(false);
+  const [reportRefresh, setReportRefresh] = useState(0);
   const [filters, setFilters] = useState({ league: "all", market: "all", minConfidence: 0, minOdd: 0, search: "", mostrarApenasAprovados: false });
   const [signals, setSignals] = useState([]);
   const signalsRef = useRef(signals);
@@ -201,14 +202,16 @@ export default function App() {
     let cursor = 0;
     let since = "";
     let pendingOffset = 0;
+    let pendingCursor = '';
     async function refreshReport() {
-      let retryDelay = 60000;
+      let retryDelay = 300000;
       try {
         const pending = selectPendingSignalIds(signalsRef.current, pendingOffset);
-        const payload = await listSignals(cursor, since, pending.ids);
+        const payload = await listSignals(cursor, since, pending.ids, pendingCursor);
         if (stopped) return;
         since = payload.syncToken || since;
         pendingOffset = pending.nextOffset;
+        pendingCursor = payload.pendingCursor || '';
         cursor = payload.settlement?.nextCursor || 0;
         const saved = payload.signals || [];
         saved.forEach((signal) => { if (signal.key) savedSignalKeysRef.current.add(signal.key); });
@@ -218,7 +221,7 @@ export default function App() {
         } else if (payload.settlement?.updated) {
           setBankStatus(`${payload.settlement.updated} resultado(s) final(is) atualizado(s).`);
         } else {
-          setBankStatus('Banco de sinais consultado.');
+          setBankStatus(`Banco consultado: ${payload.settlement?.pendingChecked || 0} pendente(s) revisado(s), aguardando resultado final confirmado.`);
         }
       } catch (error) {
         if (/quota|RESOURCE_EXHAUSTED/i.test(error.message)) retryDelay = 300000;
@@ -229,7 +232,7 @@ export default function App() {
     }
     refreshReport();
     return () => { stopped = true; window.clearTimeout(timer); };
-  }, [accessToken]);
+  }, [accessToken, reportRefresh]);
 
   useEffect(() => {
     if (!autoSave || !accessToken) return;
@@ -356,6 +359,8 @@ export default function App() {
       bankStatus,
       changeSignalResult,
       removeSignal,
+      onRefreshResults: () => setReportRefresh(value => value + 1),
+      canRefreshResults: Boolean(accessToken),
       dateStart,
       setDateStart,
       dateEnd,
