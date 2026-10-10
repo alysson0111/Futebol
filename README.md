@@ -38,10 +38,25 @@ Firebase/Telegram conservam suas configuracoes. Integracoes antigas e
 suas rotas de dados foram removidas. O arquivo legado app.js, que possui
 uma alteracao local anterior, nao e servido nem incluido na publicacao.
 
+## Analise OpenAI opcional
+
+O botao Analisar com IA gera uma leitura descritiva em portugues com
+fontes, contexto do evento, cotacoes, liquidez e limitacoes. Configure
+OPENAI_API_KEY apenas no servidor (.env local ou variavel na Vercel).
+OPENAI_MODEL e opcional, com padrao gpt-4.1-mini. Nunca publique a chave.
+Sem chave ou em caso de falha, aparecem apenas os fatos disponiveis.
+A OpenAI nao substitui a Polymarket como fonte, nao consulta noticias
+externas e nao inventa forma recente, xG, lesoes ou escalacoes ausentes.
+Esta analise nao ativa sinais, apostas ou previsoes de EV positivo.
+Somente o clique manual chama a IA; atualizacao automatica consulta
+apenas a Polymarket. Respostas com a mesma evidencia ficam em cache
+por ate cinco minutos nesta instancia, com limite de 100 entradas.
+A API OpenAI tem cobranca propria; a assinatura ChatGPT nao a inclui.
+
 Documentacao oficial:
 - https://docs.polymarket.com/api-reference/events/list-events
 - https://docs.polymarket.com/api-reference/market-data/get-order-book
 - https://docs.polymarket.com/api-reference/wss/sports
 
-Testes: `node --test polymarket.test.mjs scanner-route.test.mjs`.
+Testes: `node --test polymarket.test.mjs scanner-route.test.mjs sports-analysis.test.mjs`.
 Publicacao no GitHub/Vercel somente quando solicitada.

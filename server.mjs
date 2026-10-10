@@ -7,6 +7,7 @@ import { cert, getApps, initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getSportsEvents, getSportsDetails, sports, validDate, dateKey } from './polymarket.mjs';
 import { scanMatch, scannerMarkets } from './market-scanner.mjs';
+import { analyzeConfrontation } from './sports-analysis.mjs';
 
 const root = fileURLToPath(new URL('.', import.meta.url));
 for (const file of ['.env', '.env.local']) {
@@ -72,7 +73,7 @@ async function handleApi(req, res, url) {
       if (req.method === 'GET' && url.pathname === '/api/sports/details') { json(res, 200, await getSportsDetails(sport, id)); return; }
       if (req.method === 'POST' && url.pathname === '/api/sports/analysis') {
         const payload = await getSportsDetails(sport, id);
-        json(res, 200, { ...payload, engine: 'market', generatedAt: new Date().toISOString(), warning: 'Analise de cotacoes da Polymarket. Probabilidade implicita nao representa previsao independente, EV positivo ou garantia de acerto.' }); return;
+        json(res, 200, { ...payload, analysis: await analyzeConfrontation(payload) }); return;
       }
     }
     json(res, 404, { error: 'Rota nao encontrada.' });

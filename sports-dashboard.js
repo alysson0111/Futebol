@@ -145,7 +145,7 @@ async function selectGame(id) {
       <p class="muted">${escape(event.league.name)}</p><div class="detail-score">${escape(event.score.home ?? "–")} : ${escape(event.score.away ?? "–")}</div>
       <dl class="detail-meta"><dt>Data e hora</dt><dd>${escape(formatted(event.date, true))} · Brasília</dd><dt>Situação</dt><dd>${escape(phaseLabel(event))}</dd><dt>Local</dt><dd>${escape(event.venue || "Não informado")}</dd><dt>Rodada</dt><dd>${escape(event.round || "Não informada")}</dd></dl>
       <a href="${escape(event.url)}" target="_blank" rel="noopener noreferrer">Confronto na Polymarket</a>
-      <div class="analysis-actions"><button id="analyzeGame" type="button" class="primary">Atualizar cotações</button></div><section id="confrontationAnalysis" aria-live="polite">${researchHtml(payload)}</section>`;
+      <div class="analysis-actions"><button id="analyzeGame" type="button" class="primary">Analisar com IA</button><button id="refreshQuotes" type="button">Atualizar cotações</button></div><section id="confrontationAnalysis" aria-live="polite"></section><section id="marketQuotes">${researchHtml(payload)}</section>`;
   } catch (error) { if (error.name !== "AbortError") $("detail").innerHTML = `<h2>Detalhes da partida</h2><p class="muted">${escape(error.message)}</p>`; }
 }
 function historyHtml(title, stats, teamId) {
@@ -170,6 +170,18 @@ function researchHtml(payload) {
     ${markets.length ? markets.map(market => `<section class="quote-market"><h3>${escape(market.title)}</h3><p class="muted">${market.closed ? 'Mercado encerrado' : market.active ? 'Livro de ofertas aberto' : 'Mercado indisponível'} · Liquidez: US$ ${decimal(market.liquidity)} · ${market.feesEnabled ? 'Taxas aplicáveis' : 'Consulte taxas do contrato'}</p><div class="table-scroll"><table><thead><tr><th>Resultado</th><th>Compra US$</th><th>Odd equivalente</th><th>Prob. implícita</th><th>Cotas na oferta</th></tr></thead><tbody>${market.outcomes.map(outcome => `<tr><td>${escape(outcomeLabel(outcome.label))}</td><td>${decimal(outcome.quote?.ask)}</td><td>${decimal(outcome.quote?.odd)}</td><td>${percentage(outcome.quote?.impliedProbability)}</td><td>${decimal(outcome.quote?.availableShares)}</td></tr>`).join('')}</tbody></table></div><details><summary>Regras do contrato e preços de referência</summary><p class="contract-rules">${escape(market.description)}</p><p>${market.outcomes.map(outcome => `${escape(outcomeLabel(outcome.label))}: ${decimal(outcome.referencePrice)}`).join(' · ')}</p><p class="muted">Referência Gamma: ${escape(formatted(market.updatedAt, true))}</p></details></section>`).join('') : '<p class="muted">Nenhum mercado disponível.</p>'}
     <p class="analysis-footnote">Odd equivalente = 1 / preço da oferta de compra, antes de taxas. Probabilidade implícita não é previsão independente. Sem oferta CLOB, a odd permanece indisponível.</p>`;
 }
+function narrativeHtml(analysis) {
+  const sources = new Map((analysis.sources || []).map(source => [source.id, source]));
+  return `<div class="analysis-heading"><h3>${analysis.engine === 'ai' ? 'Análise OpenAI' : 'Leitura dos dados disponíveis'}</h3><span>${escape(formatted(analysis.generatedAt, true))}</span></div>
+    ${analysis.warning ? `<p class="analysis-notice">${escape(analysis.warning)}</p>` : ''}
+    ${(analysis.sections || []).map(section => `<section class="analysis-section"><h3>${escape(section.title)}</h3><p>${escape(section.text)}</p><p class="analysis-references">${section.sources.map(id => {
+      const source = sources.get(id);
+      if (!source) return '';
+      let url;
+      try { const parsed = new URL(source.url); if (parsed.protocol === 'https:' && parsed.hostname === 'polymarket.com') url = parsed.href; } catch { /* Invalid sources render as text. */ }
+      return url ? `<a href="${escape(url)}" target="_blank" rel="noopener noreferrer">${escape(source.title)}</a>` : escape(source.title);
+    }).join(' · ')}</p></section>`).join('')}`;
+}
 async function analyzeGame() {
   const id = selected;
   const currentSport = sport;
@@ -180,11 +192,12 @@ async function analyzeGame() {
   const controller = new AbortController();
   analysisController = controller;
   button.disabled = true;
-  target.innerHTML = '<p class="muted">Consultando cotações da Polymarket...</p>';
+  target.innerHTML = '<p class="muted">Analisando os dados do confronto...</p>';
   try {
     const payload = await api("analysis", { sport: currentSport, id }, controller.signal, "POST");
     if (selected === id && sport === currentSport && target.isConnected) {
-      target.innerHTML = researchHtml(payload);
+      target.innerHTML = narrativeHtml(payload.analysis);
+      $("marketQuotes").innerHTML = researchHtml(payload);
     }
   } catch (error) {
     if (error.name !== "AbortError" && target.isConnected) target.innerHTML = `<p class="analysis-notice">${escape(error.message)}</p>`;
@@ -325,7 +338,10 @@ $("sports").addEventListener("click", event => {
   events = []; $("league").value = ""; $("search").value = ""; resetDetail(); render(); load();
 });
 $("games").addEventListener("click", event => { const button = event.target.closest("button[data-id]"); if (button) selectGame(button.dataset.id); });
-$("detail").addEventListener("click", event => { if (event.target.closest("#analyzeGame")) analyzeGame(); });
+$("detail").addEventListener("click", event => {
+  if (event.target.closest("#analyzeGame")) analyzeGame();
+  if (event.target.closest("#refreshQuotes") && selected) selectGame(selected);
+});
 $("openReport").addEventListener("click", () => {
   $("startDate").value = $("endDate").value = $("date").value;
   reportRows = []; $("reportContent").innerHTML = ""; $("reportStatus").textContent = "";
