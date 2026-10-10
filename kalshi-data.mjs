@@ -1,4 +1,5 @@
 import { validDate } from './sports-data.mjs';
+import { assessEntry } from './entry-scanner.mjs';
 
 const base = 'https://external-api.kalshi.com/trade-api/v2';
 const types = { football: 'soccer_tournament_multi_leg', tennis: 'tennis_tournament_singles', basketball: 'basketball_game', nfl: 'football_game' };
@@ -131,7 +132,9 @@ export async function getKalshiDetails(sport, id) {
     type: ({ score_change: 'Gol', yellow_card: 'Cartão amarelo', red_card: 'Cartão vermelho' })[item.event_type] || item.event_type,
     time: { elapsed: String(item.time || '').replace(/'$/, '') }, player: { name: item.player }, team: event[side]
   })));
-  return { source: 'Kalshi', event, statistics, timeline, warning: warnings.join(' '), updatedAt: new Date().toISOString() };
+  const result = { source: 'Kalshi', event, statistics, timeline, warning: warnings.join(' '), updatedAt: new Date().toISOString() };
+  result.entries = ['over-05', 'over-15', 'over-25', 'under-25', 'under-35', 'corners', 'handicap', 'ml'].map(market => ({ market, ...assessEntry(result, market) }));
+  return result;
 }
 export async function scanKalshi(sport, id, market) {
   const payload = await getKalshiDetails(sport, id);
@@ -140,11 +143,12 @@ export async function scanKalshi(sport, id, market) {
     : market === 'handicap' ? contract.type === 'spreads' : market === 'corners' ? contract.type === 'corners'
       : ['football'].includes(sport) && contract.type === 'totals' && contract.line === line);
   const side = market.startsWith('under') ? 'Nao' : 'Sim';
+  const analysis = assessEntry(payload, market);
   const assessments = eligible.flatMap(contract => contract.outcomes.filter(outcome => outcome.label === side).map(outcome => ({
     selection: `${contract.title} - ${outcome.label}`, odd: outcome.quote?.odd ?? null,
     impliedProbability: outcome.quote?.impliedProbability ?? null, quote: outcome.quote, approved: false,
-    rate: null, lower: null, upper: null, sample: null
-  })));
-  return { source: 'Kalshi', event: payload.event, market, signals: [], assessments, warnings: payload.warning ? [payload.warning] : [], delivery: [],
-    checkedAt: new Date().toISOString(), reason: assessments.length ? 'Cotacoes Kalshi antes de taxas. Preco implicito nao e confiabilidade independente nem EV+. Estrategia de sinais ainda nao validada para esta fonte.' : 'Nenhum contrato exato encontrado para este mercado. Nenhum mercado de equipe ou periodo foi usado como substituto.' };
+    rate: null, lower: null, upper: null, sample: null, ...analysis
+  }))).slice(0, 1);
+  return { source: 'Kalshi', event: payload.event, market, signals: [], assessments: assessments.length ? assessments : [analysis], warnings: payload.warning ? [payload.warning] : [], delivery: [],
+    checkedAt: new Date().toISOString(), reason: analysis.reason };
 }

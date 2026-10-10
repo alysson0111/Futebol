@@ -116,3 +116,9 @@ th { background: #eff4f5; }
   dialog::backdrop { background: transparent; } .table-scroll { overflow: visible; } th { background: white; }
   tr { break-inside: avoid; } thead { display: table-header-group; }
 }
+ .entry-checks { width: 100%; }
+ .entry-checks ul { padding-left: 20px; }
+ .entry-checks li { margin: 8px 0; overflow-wrap: anywhere; }
+ .missing-check { color: #805b08; }
+ .passed-check { color: #126044; }
+ .failed-check { color: #a82c20; }

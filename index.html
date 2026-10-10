@@ -50,7 +50,7 @@
     </section>
     <section id="scannerPanel" class="scanner-panel" hidden>
       <div class="section-title"><h2 id="scannerTitle">Scanner</h2><button id="scanMarkets" type="button" class="primary">Verificar jogos</button></div>
-      <div class="scanner-controls"><label class="switch-label"><input id="autoSignals" type="checkbox">Envio automático ao Telegram</label><label>Token de envio<input id="scannerToken" type="password" autocomplete="off"></label></div>
+      <div class="scanner-controls"><label>Confiabilidade mínima (%)<input id="minConfidence" type="number" min="0" max="100" value="0"></label><label class="switch-label"><input id="approvedOnly" type="checkbox">Só entradas aprovadas</label><label class="switch-label"><input id="autoSignals" type="checkbox">Envio automático ao Telegram</label><label>Token de envio<input id="scannerToken" type="password" autocomplete="off"></label></div>
       <p id="scannerStatus" role="status"></p><div id="scannerResults" aria-live="polite"></div>
     </section>
     <section class="workspace">
