@@ -13,6 +13,11 @@ let reportController;
 let reportRows = [];
 let reportMeta = null;
 const analysisCache = new Map();
+let activeMarket = 'general';
+let scannerController;
+let scannerCursor = 0;
+const scannerResults = new Map();
+const marketLabels = { 'over-05': '+0.5 gols', 'over-15': '+1.5 gols', 'over-25': '+2.5 gols', 'under-25': 'Under 2.5', 'under-35': 'Under 3.5 IA', corners: 'Escanteios', handicap: 'Handicap', ml: 'ML' };
 const escape = value => String(value ?? "").replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
 function today() {
   const parts = new Intl.DateTimeFormat("en", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
@@ -93,6 +98,7 @@ async function load() {
     render();
     if (selected && events.some(event => String(event.id) === selected)) await selectGame(selected);
     else resetDetail();
+    if (activeMarket !== 'general') await scanMarkets();
   } catch (error) {
     if (error.name === "AbortError") return;
     events = [];
@@ -243,6 +249,74 @@ function exportCsv() {
   const link = document.createElement("a"); link.href = url; link.download = `partidas-${reportMeta.start}-${reportMeta.end}.csv`; link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+function clearScanner() {
+  scannerController?.abort(); scannerCursor = 0; scannerResults.clear();
+  $('scannerResults').innerHTML = ''; $('scannerStatus').textContent = '';
+  for (const badge of $('markets').querySelectorAll('button span')) badge.textContent = '';
+  for (const tab of $('markets').querySelectorAll('button')) tab.classList.remove('has-signals');
+  $('scanMarkets').disabled = false;
+}
+function percentage(value) { return Number.isFinite(value) ? `${(value * 100).toFixed(1).replace('.', ',')}%` : 'Não disponível'; }
+function renderScanner() {
+  const records = [...scannerResults.values()].filter(row => row.market === activeMarket);
+  const count = records.reduce((sum, row) => sum + row.signals.length, 0);
+  const tab = $('markets').querySelector(`[data-market="${activeMarket}"]`);
+  tab.querySelector('span').textContent = String(count);
+  tab.classList.toggle('has-signals', count > 0);
+  $('scannerResults').innerHTML = records.map(row => {
+    const event = row.event;
+    const entries = row.assessments?.length ? row.assessments : row.signals;
+    return `<article class="scanner-result"><h3>${escape(event ? `${event.home.name} × ${event.away.name}` : row.gameName)}</h3><p class="muted">${escape(formatted(row.checkedAt, true))} · Brasília</p>${entries.map(item => `<div class="market-assessment ${item.approved ? 'approved' : ''}"><strong>${escape(item.team || 'Partida')} · ${escape(item.selection)}</strong><span>Odd ${escape(Number(item.odd).toFixed(2))} ${escape(item.bookmaker || '')}</span><span>Frequência histórica: ${percentage(item.rate)}${item.sample != null ? ` · ${item.hits}/${item.sample} jogos` : ''}</span><span>Intervalo de 95%: ${percentage(item.lower)} a ${percentage(item.upper)}</span><strong>${item.approved ? 'Sinal aprovado pelo filtro' : 'Não aprovado'}</strong></div>`).join('')}<p class="muted">${escape(row.reason)}</p>${row.warnings.length ? `<p class="analysis-notice">${escape(row.warnings.join(' | '))}</p>` : ''}${row.delivery?.map(item => `<p>${escape(item.selection)}: ${escape(item.status)}${item.error ? ` · ${escape(item.error)}` : ''}</p>`).join('') || ''}</article>`;
+  }).join('');
+}
+async function scanMarkets() {
+  if (activeMarket === 'general' || $('scanMarkets').disabled) return;
+  if (sport !== 'football') { $('scannerStatus').textContent = 'Estratégias disponíveis apenas para futebol. Nenhum sinal de outra modalidade será misturado.'; return; }
+  scannerController?.abort();
+  const controller = new AbortController(); scannerController = controller;
+  const market = activeMarket, date = $('date').value;
+  const send = $('autoSignals').checked;
+  const token = $('scannerToken').value.trim();
+  if (send && !token) { $('scannerStatus').textContent = 'Informe o token de envio para habilitar o Telegram.'; return; }
+  const candidates = visibleEvents().filter(event => market === 'over-05' ? event.phase === 'live' && event.score.home === 0 && event.score.away === 0 : event.phase === 'scheduled' && new Date(event.date) > new Date());
+  if (!candidates.length) { $('scannerStatus').textContent = 'Nenhum jogo elegível para os filtros atuais.'; return; }
+  if (scannerCursor >= candidates.length) scannerCursor = 0;
+  const batch = candidates.slice(scannerCursor, scannerCursor + 3);
+  $('scanMarkets').disabled = true;
+  try {
+    for (const [index, game] of batch.entries()) {
+      $('scannerStatus').textContent = `Verificando ${scannerCursor + index + 1}/${candidates.length}: ${game.home.name} × ${game.away.name}`;
+      let payload;
+      try {
+        const response = await fetch(`/api/scanner?${new URLSearchParams({ market, id: game.id })}`, { method: send ? 'POST' : 'GET', signal: controller.signal, headers: send ? { Authorization: `Bearer ${token}` } : {} });
+        payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || 'Falha na consulta.');
+      } catch (error) {
+        if (error.name === 'AbortError') throw error;
+        payload = { market, event: game, signals: [], warnings: [error.message], checkedAt: new Date().toISOString(), reason: 'Sem confirmação: nenhum sinal aprovado.' };
+      }
+      if (activeMarket !== market || sport !== 'football' || $('date').value !== date) return;
+      payload.gameName = `${game.home.name} × ${game.away.name}`;
+      scannerResults.set(`${market}:${game.id}`, payload); renderScanner();
+    }
+    scannerCursor += batch.length;
+    $('scannerStatus').textContent = `Lote concluído: ${batch.length} jogos verificados; ${scannerCursor}/${candidates.length} percorridos. ${send ? 'Envio habilitado.' : 'Telegram desativado.'}`;
+  } catch (error) { if (error.name !== 'AbortError') $('scannerStatus').textContent = error.message; }
+  finally { if (scannerController === controller) $('scanMarkets').disabled = false; }
+}
+$('markets').addEventListener('click', event => {
+  const tab = event.target.closest('button[data-market]'); if (!tab) return;
+  scannerController?.abort(); $('scanMarkets').disabled = false; scannerCursor = 0;
+  activeMarket = tab.dataset.market;
+  for (const button of $('markets').querySelectorAll('button')) button.setAttribute('aria-pressed', String(button === tab));
+  $('scannerPanel').hidden = activeMarket === 'general';
+  if (activeMarket !== 'general') { $('scannerTitle').textContent = marketLabels[activeMarket]; renderScanner(); scanMarkets(); }
+});
+$('scanMarkets').addEventListener('click', scanMarkets);
+$('autoSignals').addEventListener('change', () => { if ($('autoSignals').checked) scanMarkets(); });
+$('date').addEventListener('change', clearScanner);
+$('sports').addEventListener('click', clearScanner);
+for (const id of ['search', 'league', 'phase']) $(id).addEventListener(id === 'search' ? 'input' : 'change', clearScanner);
 $("date").value = today();
 $("date").addEventListener("change", () => { resetDetail(); load(); });
 $("refresh").addEventListener("click", load);

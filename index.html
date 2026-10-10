@@ -11,6 +11,18 @@
     <div class="brand"><span class="brand-mark">CE</span><div><h1>Central Esportiva</h1><p>Calendário e resultados</p></div></div>
     <span id="connection" role="status">Conectando</span>
   </header>
+  <div class="app-layout">
+  <nav id="markets" class="market-sidebar" aria-label="Mercados">
+    <button data-market="general" aria-pressed="true">Painel geral</button>
+    <button data-market="over-05" aria-pressed="false">+0.5 gols <span></span></button>
+    <button data-market="over-15" aria-pressed="false">+1.5 gols <span></span></button>
+    <button data-market="over-25" aria-pressed="false">+2.5 gols <span></span></button>
+    <button data-market="under-25" aria-pressed="false">Under 2.5 <span></span></button>
+    <button data-market="under-35" aria-pressed="false">Under 3.5 IA <span></span></button>
+    <button data-market="corners" aria-pressed="false">Escanteios <span></span></button>
+    <button data-market="handicap" aria-pressed="false">Handicap <span></span></button>
+    <button data-market="ml" aria-pressed="false">ML <span></span></button>
+  </nav>
   <main>
     <nav id="sports" class="sport-tabs" aria-label="Modalidades">
       <button data-sport="football" aria-pressed="true">Futebol</button>
@@ -35,11 +47,17 @@
       <div><span>Encerradas</span><strong id="finished">0</strong></div>
       <div class="update"><span>Última atualização</span><strong id="updated">--</strong></div>
     </section>
+    <section id="scannerPanel" class="scanner-panel" hidden>
+      <div class="section-title"><h2 id="scannerTitle">Scanner</h2><button id="scanMarkets" type="button" class="primary">Verificar jogos</button></div>
+      <div class="scanner-controls"><label class="switch-label"><input id="autoSignals" type="checkbox">Envio automático ao Telegram</label><label>Token de envio<input id="scannerToken" type="password" autocomplete="off"></label></div>
+      <p id="scannerStatus" role="status"></p><div id="scannerResults" aria-live="polite"></div>
+    </section>
     <section class="workspace">
       <div class="schedule"><div class="section-title"><h2 id="listTitle">Jogos do dia</h2><span id="count">0 partidas</span></div><div id="games" aria-live="polite"></div></div>
       <aside id="detail" class="detail" aria-live="polite"><h2>Detalhes da partida</h2><p class="muted">Nenhuma partida selecionada.</p></aside>
     </section>
   </main>
+  </div>
   <dialog id="reportDialog">
     <form id="reportForm">
       <div class="section-title"><h2>Relatório de partidas</h2><button id="closeReport" type="button" aria-label="Fechar">Fechar</button></div>

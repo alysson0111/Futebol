@@ -42,7 +42,7 @@ export function normalizeSportsEvent(item, sport) {
     periods: football ? item.score || {} : item.scores || {}
   };
 }
-async function request(sport, path, params) {
+export async function requestSportsData(sport, path, params) {
   const config = sports[sport];
   const key = apiKey(sport);
   if (!key) throw new Error("Chave da API-Sports nao configurada no servidor.");
@@ -72,6 +72,7 @@ async function request(sport, path, params) {
   pending.set(cacheKey, operation);
   try { return await operation; } finally { pending.delete(cacheKey); }
 }
+const request = requestSportsData;
 export async function getSportsEvents(sport, date) {
   if (!sports[sport]) throw new Error("Modalidade invalida.");
   if (!validDate(date)) throw new Error("Data invalida.");
