@@ -5,6 +5,9 @@ import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cert, getApps, initializeApp } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
+import { getSportsEvents, getSportsDetails, sports, validDate } from "./sports-data.mjs";
+import { analyzeConfrontation } from "./sports-analysis.mjs";
+import { scanMatch, scannerMarkets } from "./market-scanner.mjs";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 loadLocalEnv(".env");
@@ -237,7 +240,9 @@ function telegramSignalMessage(record) {
     `Placar: ${alert.score || "pre-jogo"}`,
     Number.isFinite(minute) && minute > 0 ? `Minuto: ${minute}'` : null,
     Number.isFinite(odd) && odd > 0 ? `Odd: ${odd.toFixed(2)}` : "Odd: nao disponivel",
-    Number.isFinite(Number(alert.probability)) ? `Confianca: ${Math.round(Number(alert.probability))}%` : null,
+    alert.historicalRate != null ? `Frequencia historica: ${Math.round(alert.historicalRate * 100)}% (${alert.sample} jogos). Nao e probabilidade calibrada.` : null,
+    alert.lower != null ? `Intervalo historico de 95%: ${Math.round(alert.lower * 100)}% a ${Math.round(alert.upper * 100)}%` : null,
+    alert.probability != null && Number.isFinite(Number(alert.probability)) ? `Confianca: ${Math.round(Number(alert.probability))}%` : null,
     alert.reason ? `Analise: ${alert.reason}` : null,
     `Enviado em: ${sentDate}`
   ].filter(Boolean).join("\n").slice(0, 4096);
@@ -2567,6 +2572,84 @@ async function reportResultsForDate(date, sport, type) {
 }
 
 async function handleApi(req, res, url) {
+  if ((req.method === "GET" || req.method === "POST") && url.pathname === "/api/scanner") {
+    const market = url.searchParams.get("market");
+    const id = url.searchParams.get("id");
+    if (!scannerMarkets[market] || !/^\d+$/.test(id || "")) { json(res, 400, { error: "Mercado ou partida invalida." }); return; }
+    const dispatch = req.method === "POST";
+    if (dispatch && (!process.env.SCANNER_ACCESS_TOKEN || req.headers.authorization !== `Bearer ${process.env.SCANNER_ACCESS_TOKEN}`)) {
+      json(res, 403, { error: "Envio protegido: configure SCANNER_ACCESS_TOKEN no servidor e informe o token de envio." }); return;
+    }
+    if (dispatch && (!telegramIsConfigured() || !getFirebaseDatabase())) {
+      json(res, 409, { error: "Configure Telegram e Firebase antes do envio. O banco evita mensagens duplicadas." }); return;
+    }
+    try {
+      let result;
+      if (market === "over-05") {
+        const date = saoPauloDateKey();
+        const [events, odds] = await Promise.all([fetchApiFootballEvents(date, "football", { liveOnly: true }), fetchLiveMatchGoalOdds()]);
+        const eligible = events.filter(event => String(event.id) === id && normalizeEvent(event).status?.type === "inprogress" && normalizeEvent(event).status?.short === "2H");
+        const alerts = await buildPremiumMatchGoalAlerts(eligible, odds);
+        result = { market, label: scannerMarkets[market], signals: alerts.map(item => ({ ...item.alert, selection: item.alert.selection || "Over 0.5", odd: item.alert.marketOdd, approved: true, legacyEvent: item.event })),
+          assessments: [], warnings: [], reason: alerts.length ? "Filtro Premium e odd ao vivo confirmados. Sem probabilidade calibrada disponivel." : "Nenhum sinal passou pelo filtro Premium, placar 0 x 0, segundo tempo e odd real minima de 1.60.", checkedAt: new Date().toISOString() };
+      } else result = await scanMatch(id, market);
+      const delivery = [];
+      if (dispatch) for (const signal of result.signals) {
+        const event = signal.legacyEvent || { id: result.event.id, homeTeam: result.event.home, awayTeam: result.event.away, tournament: result.event.league };
+        const date = saoPauloDateKey();
+        const record = { id: `scanner:${market}:${id}:${signal.selection}`, type: `scanner-${market}`, date, source: "api-football", createdAt: new Date().toISOString(), event,
+          alert: { label: `${scannerMarkets[market]} - ${signal.selection}`, marketOdd: signal.odd, minute: signal.minute ?? null, score: signal.score || "pre-jogo", historicalRate: signal.rate ?? null, sample: signal.sample ?? null, lower: signal.lower ?? null, upper: signal.upper ?? null, reason: result.reason } };
+        const prior = await getFirebaseDatabase().collection("signals").doc(encodeURIComponent(record.id)).get();
+        if (prior.data()?.telegramSentAt) { delivery.push({ selection: signal.selection, status: "ja enviado", error: null }); continue; }
+        if (prior.data()?.createdAt) record.createdAt = prior.data().createdAt;
+        if (!await saveSignalsToFirebase([record])) throw new Error("Falha ao salvar sinal: envio cancelado.");
+        const sent = await sendSignalToTelegram(record);
+        const saved = await getFirebaseDatabase().collection("signals").doc(encodeURIComponent(record.id)).get();
+        const state = saved.data() || {};
+        delivery.push({ selection: signal.selection, status: sent ? "enviado" : state.telegramSentAt ? "ja enviado" : "falha ou envio em andamento", error: state.telegramError || null });
+      }
+      json(res, 200, { ...result, delivery });
+    } catch (error) { json(res, 502, { error: error.message }); }
+    return;
+  }
+
+  if ((req.method === "GET" || req.method === "POST") && url.pathname.startsWith("/api/sports/")) {
+    const sport = url.searchParams.get("sport") || "football";
+    if (!sports[sport]) {
+      json(res, 400, { error: "Modalidade invalida." });
+      return;
+    }
+    try {
+      if (req.method === "GET" && url.pathname === "/api/sports/events") {
+        const date = url.searchParams.get("date") || saoPauloDateKey();
+        if (!validDate(date)) {
+          json(res, 400, { error: "Data invalida." });
+          return;
+        }
+        json(res, 200, { sport, date, updatedAt: new Date().toISOString(), ...await getSportsEvents(sport, date) });
+      } else if (req.method === "GET" && url.pathname === "/api/sports/details") {
+        const id = url.searchParams.get("id");
+        if (!/^\d+$/.test(id || "")) {
+          json(res, 400, { error: "Partida invalida." });
+          return;
+        }
+        json(res, 200, await getSportsDetails(sport, id));
+      } else if (req.method === "POST" && url.pathname === "/api/sports/analysis") {
+        const id = url.searchParams.get("id");
+        if (!/^\d+$/.test(id || "")) {
+          json(res, 400, { error: "Partida invalida." });
+          return;
+        }
+        json(res, 200, await analyzeConfrontation(sport, id));
+      } else {
+        json(res, 404, { error: "Rota nao encontrada." });
+      }
+    } catch (error) {
+      json(res, 502, { error: error.message, events: [] });
+    }
+    return;
+  }
+
   if (req.method === "GET" && url.pathname === "/api/telegram-status") {
     json(res, 200, {
       configured: telegramIsConfigured(),
@@ -2999,7 +3082,8 @@ async function handleApi(req, res, url) {
 
 async function serveStatic(req, res, url) {
   const requested = url.pathname === "/" ? "/index.html" : decodeURIComponent(url.pathname);
-  if (!["/index.html", "/app.js", "/styles.css"].includes(requested)) {
+  const publicFiles = new Set(["/index.html", "/sports-dashboard.js", "/sports.css", "/app.js", "/styles.css"]);
+  if (!publicFiles.has(requested)) {
     res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
     res.end("Arquivo nao encontrado.");
     return;

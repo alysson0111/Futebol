@@ -6,3 +6,5 @@ data
 *.log
 firebase-service-account*.json
 *.test.mjs
+app.js
+styles.css

@@ -1,10 +1,5 @@
 # Sistema de Analise de Jogos
 
-Versao original restaurada a partir de fd77aac, anterior ao novo painel
-e a Polymarket. Historicos e configuracoes locais foram preservados.
-Arquivos privados nao sao servidos pelo servidor. Testes de restauracao:
-`node --test restored-system.test.mjs`.
-
 Aplicacao local para carregar jogos da API-Football/API-Sports e gerar previsao do confronto com um modelo local explicavel.
 
 ## Como pegar a chave gratuita
