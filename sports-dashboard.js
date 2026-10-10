@@ -64,7 +64,7 @@ function render() {
   for (const img of $("games").querySelectorAll("img")) img.addEventListener("error", () => { img.hidden = true; }, { once: true });
 }
 async function api(path, params, signal, method = "GET") {
-  const response = await fetch(`/api/sports/${path}?${new URLSearchParams(params)}`, { signal, method });
+  const response = await fetch(`/api/sports/${path}?${new URLSearchParams({ provider: $('provider').value, ...params })}`, { signal, method });
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error || "Não foi possível consultar os dados.");
   return payload;
@@ -92,7 +92,7 @@ async function load() {
     const leagues = new Map(events.map(event => [String(event.league.id ?? event.league.name), event.league.name]));
     $("league").innerHTML = '<option value="">Todos</option>' + [...leagues].sort((a, b) => a[1].localeCompare(b[1])).map(([id, name]) => `<option value="${escape(id)}">${escape(name)}</option>`).join("");
     if (leagues.has(previousLeague)) $("league").value = previousLeague;
-    $("connection").textContent = payload.available ? "API-Sports" : "Fonte pendente";
+    $("connection").textContent = payload.available ? payload.source || "API-Sports" : "Fonte pendente";
     $("updated").textContent = payload.available ? formatted(payload.updatedAt) : "--";
     if (payload.warning) { $("message").textContent = payload.warning; $("message").hidden = false; }
     render();
@@ -146,9 +146,13 @@ async function selectGame(id) {
     $("detail").innerHTML = `<h2>${escape(event.home.name)} × ${escape(event.away.name)}</h2>
       <p class="muted">${escape(event.league.name)}</p><div class="detail-score">${escape(event.score.home ?? "–")} : ${escape(event.score.away ?? "–")}</div>
       <dl class="detail-meta"><dt>Data e hora</dt><dd>${escape(formatted(event.date, true))} · Brasília</dd><dt>Situação</dt><dd>${escape(phaseLabel(event))}</dd><dt>Local</dt><dd>${escape(event.venue || "Não informado")}</dd><dt>Rodada</dt><dd>${escape(event.round || "Não informada")}</dd></dl>
-      <div class="analysis-actions"><button id="analyzeGame" type="button" class="primary">Analisar confronto</button></div><section id="confrontationAnalysis" aria-live="polite">${savedAnalysis ? researchHtml(savedAnalysis) : ""}</section>
+      <div class="analysis-actions"><button id="analyzeGame" type="button" class="primary">${payload.source === 'Kalshi' ? 'Atualizar cotações' : 'Analisar confronto'}</button></div><section id="confrontationAnalysis" aria-live="polite">${payload.source === 'Kalshi' ? kalshiQuotesHtml(payload) : savedAnalysis ? researchHtml(savedAnalysis) : ""}</section>
       <h3>Estatísticas</h3>${statisticsHtml(payload.statistics)}${timeline ? `<h3>Eventos da partida</h3><ol class="timeline">${timeline}</ol>` : ""}${payload.warning ? `<p class="muted">${escape(payload.warning)}</p>` : ""}`;
   } catch (error) { if (error.name !== "AbortError") $("detail").innerHTML = `<h2>Detalhes da partida</h2><p class="muted">${escape(error.message)}</p>`; }
+}
+function kalshiQuotesHtml(payload) {
+  const decimal = value => Number.isFinite(value) ? value.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 4 }) : '--';
+  return `<div class="analysis-heading"><h3>Cotações Kalshi</h3><span>${escape(formatted(payload.updatedAt, true))}</span></div>${(payload.event.markets || []).map(market => `<section class="analysis-section"><h3>${escape(market.title)}</h3><p class="muted">${escape(market.status)} · Volume: ${decimal(market.volume)} contratos${market.result ? ` · Resultado do contrato: ${escape(market.result === 'yes' ? 'Sim' : 'Não')}` : ''}</p><div class="table-scroll"><table><thead><tr><th>Resultado</th><th>Compra US$</th><th>Odd equivalente</th><th>Prob. implícita</th><th>Contratos na oferta</th></tr></thead><tbody>${market.outcomes.map(outcome => `<tr><td>${outcome.label === 'Nao' ? 'Não' : escape(outcome.label)}</td><td>${decimal(outcome.quote?.ask)}</td><td>${decimal(outcome.quote?.odd)}</td><td>${percentage(outcome.quote?.impliedProbability)}</td><td>${decimal(outcome.quote?.availableShares)}</td></tr>`).join('')}</tbody></table></div><details><summary>Regras do contrato</summary><p>${escape(market.description)}</p><a href="${escape(market.url)}" target="_blank" rel="noopener noreferrer">Abrir na Kalshi</a></details></section>`).join('') || '<p class="muted">Nenhum contrato disponível para esta partida.</p>'}<p class="analysis-footnote">Fonte: Kalshi. Odd equivalente = 1 / preço de compra, antes de taxas. Probabilidade implícita é preço de mercado, não confiança preditiva. Sem oferta, a odd fica indisponível. Liquidação do contrato não é o placar da partida.</p>`;
 }
 function historyHtml(title, stats, teamId) {
   if (!stats?.matches?.length) return `<h3>${escape(title)}</h3><p class="muted">Nenhum resultado anterior disponível.</p>`;
@@ -178,6 +182,7 @@ async function analyzeGame() {
   const target = $("confrontationAnalysis");
   const button = $("analyzeGame");
   if (!id || !target || !button) return;
+  if ($('provider').value === 'kalshi') { await selectGame(id); return; }
   analysisController?.abort();
   const controller = new AbortController();
   analysisController = controller;
@@ -211,7 +216,7 @@ async function generateReport(event) {
   reportRows = []; $("reportContent").innerHTML = "";
   $("csv").disabled = $("print").disabled = true;
   const currentSport = sport;
-  reportMeta = { label: labels[sport], start: $("startDate").value, end: $("endDate").value };
+  reportMeta = { label: `${labels[sport]} · ${$('provider').value === 'kalshi' ? 'Kalshi' : 'API-Sports'}`, start: $("startDate").value, end: $("endDate").value };
   $("generateReport").disabled = true;
   try {
     const dates = datesInRange(reportMeta.start, reportMeta.end);
@@ -221,6 +226,7 @@ async function generateReport(event) {
       try {
         const payload = await api("events", { sport: currentSport, date }, controller.signal);
         if (!payload.available) throw new Error(payload.warning);
+        if (payload.warning) warnings.push(`${date}: ${payload.warning}`);
         reportRows.push(...payload.events);
       } catch (error) {
         if (error.name === "AbortError") throw error;
@@ -266,11 +272,12 @@ function renderScanner() {
   $('scannerResults').innerHTML = records.map(row => {
     const event = row.event;
     const entries = row.assessments?.length ? row.assessments : row.signals;
-    return `<article class="scanner-result"><h3>${escape(event ? `${event.home.name} × ${event.away.name}` : row.gameName)}</h3><p class="muted">${escape(formatted(row.checkedAt, true))} · Brasília</p>${entries.map(item => `<div class="market-assessment ${item.approved ? 'approved' : ''}"><strong>${escape(item.team || 'Partida')} · ${escape(item.selection)}</strong><span>Odd ${escape(Number(item.odd).toFixed(2))} ${escape(item.bookmaker || '')}</span><span>Frequência histórica: ${percentage(item.rate)}${item.sample != null ? ` · ${item.hits}/${item.sample} jogos` : ''}</span><span>Intervalo de 95%: ${percentage(item.lower)} a ${percentage(item.upper)}</span><strong>${item.approved ? 'Sinal aprovado pelo filtro' : 'Não aprovado'}</strong></div>`).join('')}<p class="muted">${escape(row.reason)}</p>${row.warnings.length ? `<p class="analysis-notice">${escape(row.warnings.join(' | '))}</p>` : ''}${row.delivery?.map(item => `<p>${escape(item.selection)}: ${escape(item.status)}${item.error ? ` · ${escape(item.error)}` : ''}</p>`).join('') || ''}</article>`;
+    return `<article class="scanner-result"><h3>${escape(event ? `${event.home.name} × ${event.away.name}` : row.gameName)}</h3><p class="muted">${escape(formatted(row.checkedAt, true))} · Brasília</p>${entries.map(item => `<div class="market-assessment ${item.approved ? 'approved' : ''}"><strong>${escape(item.team || 'Partida')} · ${escape(item.selection)}</strong><span>${row.source === 'Kalshi' ? 'Odd equivalente' : 'Odd'} ${Number.isFinite(item.odd) ? escape(item.odd.toFixed(2)) : '--'} ${escape(item.bookmaker || '')}</span>${row.source === 'Kalshi' ? `<span>Probabilidade implícita: ${percentage(item.impliedProbability)}</span><span>Contratos na oferta: ${item.quote?.availableShares ?? '--'}</span>` : `<span>Frequência histórica: ${percentage(item.rate)}${item.sample != null ? ` · ${item.hits}/${item.sample} jogos` : ''}</span><span>Intervalo de 95%: ${percentage(item.lower)} a ${percentage(item.upper)}</span>`}<strong>${item.approved ? 'Sinal aprovado pelo filtro' : row.source === 'Kalshi' ? 'Somente cotação: sem sinal aprovado' : 'Não aprovado'}</strong></div>`).join('')}<p class="muted">${escape(row.reason)}</p>${row.warnings.length ? `<p class="analysis-notice">${escape(row.warnings.join(' | '))}</p>` : ''}${row.delivery?.map(item => `<p>${escape(item.selection)}: ${escape(item.status)}${item.error ? ` · ${escape(item.error)}` : ''}</p>`).join('') || ''}</article>`;
   }).join('');
 }
 async function scanMarkets() {
   if (activeMarket === 'general' || $('scanMarkets').disabled) return;
+  if ($('provider').value === 'kalshi') { await scanKalshiMarkets(); return; }
   if (sport !== 'football') { $('scannerStatus').textContent = 'Estratégias disponíveis apenas para futebol. Nenhum sinal de outra modalidade será misturado.'; return; }
   scannerController?.abort();
   const controller = new AbortController(); scannerController = controller;
@@ -313,6 +320,41 @@ $('markets').addEventListener('click', event => {
   if (activeMarket !== 'general') { $('scannerTitle').textContent = marketLabels[activeMarket]; renderScanner(); scanMarkets(); }
 });
 $('scanMarkets').addEventListener('click', scanMarkets);
+async function scanKalshiMarkets() {
+  scannerController?.abort();
+  const controller = new AbortController(); scannerController = controller;
+  const market = activeMarket, currentSport = sport;
+  const games = visibleEvents().filter(game => game.phase !== 'finished');
+  if (!games.length) { $('scannerStatus').textContent = 'Nenhuma partida elegível para consulta.'; return; }
+  if (scannerCursor >= games.length) scannerCursor = 0;
+  const batch = games.slice(scannerCursor, scannerCursor + 3);
+  $('scanMarkets').disabled = true;
+  try {
+    for (const game of batch) {
+      const response = await fetch(`/api/scanner?${new URLSearchParams({ provider: 'kalshi', sport: currentSport, market, id: game.id })}`, { signal: controller.signal });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || 'Falha na consulta Kalshi.');
+      if (activeMarket !== market || sport !== currentSport || $('provider').value !== 'kalshi') return;
+      scannerResults.set(`${market}:${game.id}`, payload); renderScanner();
+    }
+    scannerCursor += batch.length;
+    $('scannerStatus').textContent = `Kalshi: ${scannerCursor}/${games.length} partidas consultadas. Envio de sinais não ativado para esta fonte.`;
+  } catch (error) { if (error.name !== 'AbortError') $('scannerStatus').textContent = error.message; }
+  finally { if (scannerController === controller) $('scanMarkets').disabled = false; }
+}
+function syncProvider() {
+  const kalshi = $('provider').value === 'kalshi';
+  $('autoSignals').disabled = kalshi;
+  if (kalshi) $('autoSignals').checked = false;
+  $('scannerToken').disabled = kalshi;
+}
+$('provider').addEventListener('change', () => {
+  loadController?.abort(); reportController?.abort();
+  if ($('reportDialog').open) $('reportDialog').close();
+  analysisCache.clear(); clearScanner(); resetDetail(); syncProvider();
+  events = []; $('league').value = ''; render(); load();
+});
+syncProvider();
 $('autoSignals').addEventListener('change', () => { if ($('autoSignals').checked) scanMarkets(); });
 $('date').addEventListener('change', clearScanner);
 $('sports').addEventListener('click', clearScanner);

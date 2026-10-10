@@ -1,5 +1,10 @@
 # Sistema de Analise de Jogos
 
+A Central Esportiva agora permite escolher Kalshi (padrao, leitura
+publica sem chave) ou API-Sports no seletor Fonte. Consulte KALSHI.md
+para detalhes, limites, cotacoes e testes. As estrategias de sinais
+anteriores permanecem disponiveis apenas na fonte API-Sports.
+
 Aplicacao local para carregar jogos da API-Football/API-Sports e gerar previsao do confronto com um modelo local explicavel.
 
 ## Como pegar a chave gratuita

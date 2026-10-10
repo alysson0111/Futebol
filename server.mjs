@@ -8,6 +8,7 @@ import { getFirestore } from "firebase-admin/firestore";
 import { getSportsEvents, getSportsDetails, sports, validDate } from "./sports-data.mjs";
 import { analyzeConfrontation } from "./sports-analysis.mjs";
 import { scanMatch, scannerMarkets } from "./market-scanner.mjs";
+import { getKalshiEvents, getKalshiDetails, scanKalshi, validMilestone } from "./kalshi-data.mjs";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 loadLocalEnv(".env");
@@ -2572,6 +2573,23 @@ async function reportResultsForDate(date, sport, type) {
 }
 
 async function handleApi(req, res, url) {
+  if (url.searchParams.get("provider") === "kalshi" && (url.pathname.startsWith("/api/sports/") || url.pathname === "/api/scanner")) {
+    const sport = url.searchParams.get("sport") || "football";
+    if (!sports[sport]) { json(res, 400, { error: "Modalidade invalida." }); return; }
+    if (req.method !== "GET") { json(res, 409, { error: "Integracao Kalshi somente leitura: nenhum sinal ou ordem sera enviado." }); return; }
+    try {
+      if (url.pathname === "/api/sports/events") {
+        const date = url.searchParams.get("date");
+        if (!validDate(date)) { json(res, 400, { error: "Data invalida." }); return; }
+        json(res, 200, { sport, date, ...await getKalshiEvents(sport, date) });
+      } else if (url.pathname === "/api/sports/details" || url.pathname === "/api/scanner") {
+        const id = url.searchParams.get("id"), market = url.searchParams.get("market");
+        if (!validMilestone(id) || (url.pathname === "/api/scanner" && !scannerMarkets[market])) { json(res, 400, { error: "Partida ou mercado invalido." }); return; }
+        json(res, 200, url.pathname === "/api/scanner" ? await scanKalshi(sport, id, market) : await getKalshiDetails(sport, id));
+      } else json(res, 404, { error: "Rota Kalshi nao encontrada." });
+    } catch (error) { json(res, 502, { error: error.message, events: [] }); }
+    return;
+  }
   if ((req.method === "GET" || req.method === "POST") && url.pathname === "/api/scanner") {
     const market = url.searchParams.get("market");
     const id = url.searchParams.get("id");
