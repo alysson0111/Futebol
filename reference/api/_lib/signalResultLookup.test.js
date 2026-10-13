@@ -3,6 +3,18 @@ import assert from "node:assert/strict";
 import { selectResultDates, findResultGame } from "./signalResultLookup.js";
 import { mergeReportSignals } from "../../src/analysis/reportSignals.js";
 import { parseTotalCornerMarkdown, totalCornerRowsToFixtures, fetchTotalCornerDate, fetchTotalCornerResultsDate, resultPageLinks } from "./totalCorner.js";
+
+test('pagination accepts relative links but never another date or origin',()=>{
+  assert.deepEqual(resultPageLinks('[2](/pt/match/schedule/20261010/page:2) [3](https://evil.example/pt/match/schedule/20261010/page:3) [4](/pt/match/schedule/20261009/page:4)','2026-10-10'),['https://www.totalcorner.com/pt/match/schedule/20261010/page:2']);
+});
+
+test('legacy minutes and card counts require an unambiguous final match',()=>{
+  const signal={home:"Woking56'",away:'Leicester Sub21',league:'Liga',dateText:'13/10/2026',market:'ml',sourceId:'old-18:45'};
+  const final={...signal,home:'Woking',away:'Leicester Sub21 4',time:'18:45',sourceId:'new',apiStatus:'FT',scoreText:'2x2'};
+  assert.equal(findResultGame(signal,[final]),final);
+  assert.equal(findResultGame(signal,[{...final,time:'19:45'}]),null);
+  assert.equal(findResultGame(signal,[final,{...final,scoreText:'3x2'}]),null);
+});
 import { analyzeFixtures } from "./scanner.js";
 import { buildFinalSignalUpdate } from "../../src/analysis/signalSettlement.js";
 

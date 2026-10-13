@@ -27,6 +27,7 @@ function cleanLine(value) {
 
 function cleanTeam(value) {
   return cleanLine(value)
+    .replace(/\d{1,3}(?:\+\d{1,2})?['\u2019]\s*$/, "")
     .replace(/^\[[^\]]+\]\s*/, "")
     .replace(/\[[^\]]+\]/g, "")
     .replace(/^\d+\s+/, "")
@@ -361,8 +362,9 @@ export function mergeTotalCornerRows(rows, totalCornerRows) {
 export function resultPageLinks(markdown, dateIso, sourceUrl = totalCornerDateUrl(dateIso)) {
   const base = new URL(sourceUrl);
   const links = new Set();
-  for (const match of String(markdown).matchAll(/\]\((https:\/\/www\.totalcorner\.com\/[^\s)]+)\)/g)) {
-    const url = new URL(match[1]);
+  for (const match of String(markdown).matchAll(/\]\(([^\s)]+)\)/g)) {
+    let url;
+    try { url = new URL(match[1], base); } catch { continue; }
     if (url.origin !== base.origin || !(url.pathname === base.pathname || url.pathname.startsWith(base.pathname + '/'))) continue;
     const suffix = url.pathname.slice(base.pathname.length);
     if ((suffix && /^\/(?:page[:/]?)?\d+\/?$/.test(suffix)) || [...url.searchParams.keys()].some(key => /^(page|p|offset)$/i.test(key))) links.add(url.href);

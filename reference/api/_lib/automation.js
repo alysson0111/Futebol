@@ -3,12 +3,12 @@ import { now } from './firebase.js';
 import { normalizeTelegramMarkets } from '../../src/analysis/telegramMarkets.js';
 import { isEntryAllowed } from '../../src/analysis/entryTiming.js';
 import { isFinishedGame } from '../../src/analysis/signalSettlement.js';
-import { persistApprovedSignal } from '../signals.js';
+import { persistApprovedSignal, readPendingSignals, settleSignalsFromTotalCorner } from '../signals.js';
 import { fetchTotalCornerToday, totalCornerRowsToFixtures } from './totalCorner.js';
 import { analyzeFixtures, publicGame } from './scanner.js';
 
 const settingsDoc = db => db.collection('central_config').doc('telegram');
-const jobDoc = db => db.collection('central_jobs').doc('telegram');
+const jobDoc = (db,name='telegram') => db.collection('central_jobs').doc(name);
 
 export async function readAutomationSettings(db) {
   const snapshot = await settingsDoc(db).get();
@@ -25,15 +25,41 @@ export async function writeAutomationSettings(db, input) {
   return {configured:true,enabled:input.enabled,markets};
 }
 
-export async function claimAutomationRun(db, time = Date.now()) {
-  const ref = jobDoc(db), owner = randomUUID();
+export async function claimAutomationRun(db, time = Date.now(), name='telegram') {
+  const ref = jobDoc(db,name), owner = randomUUID();
   const acquired = await db.runTransaction(async transaction => {
     const snapshot = await transaction.get(ref), data = snapshot.exists ? snapshot.data() : {};
     if (Number(data.leaseUntil || 0) > time || (data.lastStartedAtMs && time - data.lastStartedAtMs < 240000)) return false;
     transaction.set(ref,{owner,leaseUntil:time+90000,lastStartedAtMs:time,status:'running',updatedAt:now()},{merge:true});
-    return {cursor:Number(data.nextOffset)||0};
+    return {cursor:Number(data.nextOffset)||0,pendingCursor:data.pendingCursor||'',dateCursor:Number(data.dateCursor)||0};
   });
-  return acquired ? {ref,owner,cursor:acquired.cursor} : null;
+  return acquired ? {ref,owner,...acquired} : null;
+}
+
+async function finishRun(db,lease,summary,extra={}) {
+  await db.runTransaction(async transaction=>{
+    const snapshot=await transaction.get(lease.ref);
+    if(snapshot.data()?.owner===lease.owner)transaction.set(lease.ref,{leaseUntil:0,status:summary.status,summary,...extra,finishedAtText:new Date().toLocaleString('pt-BR',{timeZone:'America/Sao_Paulo'}),updatedAt:now()},{merge:true});
+  });
+}
+
+export async function runResultAutomation(db,options={}) {
+  const lease=await claimAutomationRun(db,Date.now(),'results');
+  if(!lease)return {status:'busy',updated:0};
+  let summary={status:'failed',updated:0};
+  let pendingCursor=lease.pendingCursor,dateCursor=lease.dateCursor;
+  try {
+    const pending=await (options.readPending||readPendingSignals)(db,pendingCursor);
+    const result=await (options.settle||settleSignalsFromTotalCorner)(db,pending.signals,dateCursor);
+    const settlement=result.settlement;
+    pendingCursor=pending.nextCursor;
+    dateCursor=settlement.nextCursor||0;
+    summary={...settlement,status:settlement.errors?.length?'partial':'complete',pendingChecked:pending.signals.length};
+    return summary;
+  } catch(error) {
+    summary.error=error.message||'Falha ao confirmar resultados.';
+    throw error;
+  } finally {await finishRun(db,lease,summary,{pendingCursor,dateCursor});}
 }
 
 export function selectAutomationEntries(games, markets, cursor=0) {
@@ -77,9 +103,6 @@ export async function runAutomation(db, options = {}) {
     }
     return summary;
   } finally {
-    await db.runTransaction(async transaction=>{
-      const snapshot=await transaction.get(lease.ref);
-      if (snapshot.data()?.owner===lease.owner) transaction.set(lease.ref,{leaseUntil:0,nextOffset:summary.nextOffset||0,status:summary.status,summary,finishedAtText:new Date().toLocaleString('pt-BR',{timeZone:'America/Sao_Paulo'}),updatedAt:now()},{merge:true});
-    });
+    await finishRun(db,lease,summary,{nextOffset:summary.nextOffset||0});
   }
 }

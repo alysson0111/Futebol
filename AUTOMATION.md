@@ -4,6 +4,14 @@ O agendador chama a rotina no servidor; nao precisa manter o site ou o computado
 O envio segue os mercados marcados, as estrategias existentes e a regra dos 43 minutos
 para Over 0.5 e ML. Sinais ja registrados nao sao reenviados.
 
+## Resultados em segundo plano
+
+O mesmo workflow chama `/api/automation/results`, inclusive quando o envio esta
+desativado ou falha. Cada rodada consulta 100 sinais pendentes, com cursor persistido
+em `central_jobs/results`. Apenas placares finais confirmados e estatisticas suficientes
+para o mercado encerram sinais. Resultados manuais ou ja confirmados nao sao sobrescritos.
+Paginas adicionais da agenda por data tambem sao consultadas; falhas ficam no resumo.
+
 ## Ativacao gratuita
 
 1. Publique esta versao no GitHub e na Vercel.

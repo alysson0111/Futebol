@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readAutomationSettings, writeAutomationSettings, runAutomation, selectAutomationEntries, claimAutomationRun } from './automation.js';
-import { persistApprovedSignal } from '../signals.js';
+import { readAutomationSettings, writeAutomationSettings, runAutomation, runResultAutomation, selectAutomationEntries, claimAutomationRun } from './automation.js';
+import { persistApprovedSignal, settleSignalsFromTotalCorner } from '../signals.js';
 import server from '../../../reference-server.mjs';
 
 function fakeDb(settings={enabled:true,markets:['over05','ml']}) {
@@ -12,7 +12,7 @@ function fakeDb(settings={enabled:true,markets:['over05','ml']}) {
     return {id,key,get:async()=>({exists:records.has(key),data:()=>records.get(key)}),set:async(data)=>records.set(key,{...records.get(key),...data}),update:async(data)=>records.set(key,{...records.get(key),...data})};
   }}),getAll:async(...refs)=>Promise.all(refs.map(ref=>ref.get()))};
   db.runTransaction = callback => {
-    const run = queue.then(()=>callback({get:ref=>ref.get(),set:(ref,data)=>records.set(ref.key,{...records.get(ref.key),...data})}));
+    const run = queue.then(()=>callback({get:ref=>ref.get(),getAll:(...refs)=>db.getAll(...refs),update:(ref,data)=>records.set(ref.key,{...records.get(ref.key),...data}),set:(ref,data)=>records.set(ref.key,{...records.get(ref.key),...data})}));
     queue=run.catch(()=>{});
     return run;
   };
@@ -20,6 +20,39 @@ function fakeDb(settings={enabled:true,markets:['over05','ml']}) {
 }
 const game = (market='over05',minute=43,key=`a-${market}`)=>({key,market,marketLabel:market,sourceId:'a',home:'Casa',away:'Fora',league:'Liga',dateText:'13/10/2026',status:'Entrada',confidence:80,liveStatus:`${minute}'`,apiStatus:'LIVE',scoreText:'0x0',signals:market==='ml'?['ML Casa (Casa)']:['Over 0.5 gols'],mlPick:'home'});
 const response=()=>({setHeader(){},end(body){this.body=JSON.parse(body);}});
+
+test('results run independently of Telegram preferences and rotate pending pages',async()=>{
+  const db=fakeDb({enabled:false,markets:[]});
+  const result=await runResultAutomation(db,{
+    readPending:async(_db,cursor)=>{assert.equal(cursor,'');return {signals:[game()],nextCursor:'next-id'};},
+    settle:async(_db,signals,cursor)=>{assert.equal(signals.length,1);assert.equal(cursor,0);return {settlement:{updated:1,nextCursor:2,errors:[]}};}
+  });
+  assert.equal(result.updated,1);
+  assert.equal(result.status,'complete');
+  assert.equal(db.records.get('central_jobs/results').pendingCursor,'next-id');
+  assert.equal(db.records.get('central_jobs/results').leaseUntil,0);
+  assert.equal(db.records.has('central_jobs/telegram'),false);
+});
+
+test('results source failure releases its lease without advancing the cursor',async()=>{
+  const db=fakeDb();
+  await assert.rejects(runResultAutomation(db,{readPending:async()=>{throw new Error('source failed');}}),/source failed/);
+  assert.equal(db.records.get('central_jobs/results').leaseUntil,0);
+  assert.equal(db.records.get('central_jobs/results').pendingCursor,'');
+});
+
+test('confirmed recovery preserves results changed concurrently and commits only pending signals',async()=>{
+  const db=fakeDb();
+  const pending={...game(),id:'pending',result:'pendente'};
+  const manual={...pending,id:'manual'};
+  db.records.set('central_sinais/pending',pending);
+  db.records.set('central_sinais/manual',{...manual,result:'red',finalConfirmed:true});
+  const final={...game(),apiStatus:'FT',scoreText:'1x0'};
+  const result=await settleSignalsFromTotalCorner(db,[pending,manual],0,{fetchGames:async()=>[final]});
+  assert.equal(result.settlement.updated,1);
+  assert.equal(db.records.get('central_sinais/pending').result,'green');
+  assert.equal(db.records.get('central_sinais/manual').result,'red');
+});
 
 test('settings default disabled and validate every selected market',async()=>{
   const db=fakeDb(null);
@@ -117,6 +150,8 @@ test('every settings operation requires scanner auth, and the job requires a sep
     }
     const res=response();await server({method:'POST',url:'/api/automation/run',headers:{authorization:'Bearer test-scanner'}},res);
     assert.equal(res.statusCode,401);
+    const results=response();await server({method:'POST',url:'/api/automation/results',headers:{authorization:'Bearer test-scanner'}},results);
+    assert.equal(results.statusCode,401);
   } finally {
     if(previous===undefined)delete process.env.SCANNER_ACCESS_TOKEN;else process.env.SCANNER_ACCESS_TOKEN=previous;
     if(oldAutomation===undefined)delete process.env.AUTOMATION_TOKEN;else process.env.AUTOMATION_TOKEN=oldAutomation;
