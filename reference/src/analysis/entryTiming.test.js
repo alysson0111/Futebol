@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { entryMinute, isEntryTimingAllowed, enforceEntryTiming } from './entryTiming.js';
+import { entryMinute, isEntryTimingAllowed, enforceEntryTiming, isScoreTied, isEntryAllowed } from './entryTiming.js';
 import { analisarMercado } from './index.js';
 import { analyzeFixtures, publicGame } from '../../api/_lib/scanner.js';
 import signalsHandler from '../../api/signals.js';
@@ -45,7 +45,7 @@ test('missing minutes fail closed; halftime and stoppage time have confirmed min
 
 test('Forebet and client-side approval cannot restore an early entry; other markets are unchanged', () => {
   for (const market of ['over05','ml']) {
-    const early={market,status:'Entrada',confidence:90,liveStatus:"42'",signals:['Previsao'],stats:[]};
+    const early={market,status:'Entrada',confidence:90,liveStatus:"42'",scoreText:'0x0',signals:['Previsao'],stats:[]};
     assert.equal(enforceEntryTiming(early).status,'Observar');
     assert.deepEqual(enforceEntryTiming(early).signals,[]);
     assert.equal(analisarMercado(early).entrada,false);
@@ -56,6 +56,44 @@ test('Forebet and client-side approval cannot restore an early entry; other mark
     assert.equal(enforceEntryTiming(game),game);
     assert.equal(analisarMercado(game).entrada,true);
   }
+});
+
+test('ML accepts every tied score from 43 minutes and rejects either team leading', () => {
+  for (const [home,away] of [[0,0],[1,1],[2,2],[3,3],[1,0],[0,1],[2,1],[1,2]]) {
+    const game=analyzeFixtures({response:[fixture(43,'LIVE',{home,away})]}).find(game=>game.market==='ml');
+    assert.equal(game.status,home===away?'Entrada':'Observar');
+    assert.equal(game.generatedSignals.length>0,home===away);
+    assert.equal(analisarMercado(publicGame(game)).entrada,home===away);
+    assert.ok(game.scannerChecks.some(check=>check.label==='Placar empatado para ML'&&check.passed===(home===away)));
+  }
+  assert.equal(isEntryAllowed({market:'ml',liveStatus:"42'",scoreText:'1x1'}),false);
+  assert.equal(isEntryAllowed({market:'ml',liveStatus:"43'",scoreText:'1x1'}),true);
+});
+
+test('ML score checks fail closed and cannot be bypassed by Forebet or cached approval', () => {
+  for (const scoreText of [undefined,'','-','1x0','0x1','2x1','-1x-1','1.5x1.5']) {
+    const game={market:'ml',liveStatus:"60'",status:'Entrada',scoreText,signals:['ML Casa']};
+    assert.equal(isScoreTied(game),false);
+    assert.equal(enforceEntryTiming(game).status,'Observar');
+    assert.equal(analisarMercado(game).entrada,false);
+  }
+  assert.equal(isScoreTied({goals:{home:2,away:2}}),true);
+  assert.equal(isScoreTied({goals:{home:null,away:null}}),false);
+  assert.equal(isScoreTied({scoreText:'0x0',homeGoals:1,awayGoals:0}),false);
+  assert.equal(isEntryAllowed({market:'over25',liveStatus:"60'",scoreText:'2x1'}),true);
+});
+
+test('save API refuses ML with a leading team or missing score without touching Firebase', async () => {
+  for (const scoreText of ['1x0','0x1','2x1',undefined]) {
+    let body;
+    const res={setHeader(){},end(value){body=JSON.parse(value);}};
+    await signalsHandler({method:'POST',body:{market:'ml',status:'Entrada',liveStatus:"60'",scoreText,sendTelegram:true}},res);
+    assert.equal(res.statusCode,409);
+    assert.match(body.error,/placar empatado/);
+  }
+  const res={setHeader(){},end(){}};
+  await signalsHandler({method:'POST',body:{market:'over25',analise:{mercado:'ml',entrada:true},liveStatus:"60'",scoreText:'1x0'}},res);
+  assert.equal(res.statusCode,409);
 });
 
 test('save API rejects premature or unknown-minute entries before consulting Firebase or Telegram', async () => {

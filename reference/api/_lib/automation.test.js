@@ -41,6 +41,16 @@ test('disabled automation does not read a source or send a message',async()=>{
   assert.equal(db.records.has('central_jobs/telegram'),false);
 });
 
+test('background ML selects only ties, never already-approved non-tied or unknown scores',()=>{
+  const entries=selectAutomationEntries([
+    {...game('ml',60,'tied'),scoreText:'2x2'},
+    {...game('ml',60,'home-leads'),scoreText:'1x0'},
+    {...game('ml',60,'away-leads'),scoreText:'0x1'},
+    {...game('ml',60,'missing'),scoreText:undefined}
+  ],['ml']);
+  assert.deepEqual(entries.map(entry=>entry.key),['tied']);
+});
+
 test('hundred-signal pages rotate so large lists do not permanently hide later candidates',()=>{
   const games=Array.from({length:230},(_,index)=>game('over05',43,`game-${index}`));
   let cursor=0;

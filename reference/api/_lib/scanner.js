@@ -1,4 +1,4 @@
-import { isEntryTimingAllowed, MIN_ENTRY_MINUTE } from '../../src/analysis/entryTiming.js';
+import { isEntryTimingAllowed, isScoreTied, MIN_ENTRY_MINUTE } from '../../src/analysis/entryTiming.js';
 
 const MARKETS = ["over05", "over15", "over25", "under25", "under35", "corners", "handicap", "ml"];
 
@@ -97,9 +97,11 @@ function scanMl(game) {
     || (elapsed < 60 && favoriteStrength >= 0.75);
   const lateGameSafe = elapsed === 0 || elapsed < 70 || fromScore === pick;
   const timingOk = isEntryTimingAllowed(game);
-  const passed = timingOk && hasTotalCorner && hasPrediction && confidence >= 68 && scoreConfirmsPick && lateGameSafe;
+  const tiedScore = isScoreTied(game);
+  const passed = timingOk && tiedScore && hasTotalCorner && hasPrediction && confidence >= 68 && scoreConfirmsPick && lateGameSafe;
   const checks = [
     item(`Entrada a partir de ${MIN_ENTRY_MINUTE} minutos`, timingOk, game.liveStatus || game.apiStatus || "Minuto indisponivel"),
+    item("Placar empatado para ML", tiedScore, game.scoreText || "Placar indisponivel"),
     item("IA confrontou dados do TotalCorner", hasTotalCorner, hasTotalCorner ? "ok" : "indisponivel", hasTotalCorner),
     item("Vencedor previsto", hasPrediction, mlLabel(pick, game), hasPrediction),
     item("Confianca ML >= 68%", confidence >= 68, confidence ? `${Math.round(confidence)}%` : "indisponivel", Boolean(confidence)),

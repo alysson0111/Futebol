@@ -1,7 +1,7 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { now } from './firebase.js';
 import { normalizeTelegramMarkets } from '../../src/analysis/telegramMarkets.js';
-import { isEntryTimingAllowed } from '../../src/analysis/entryTiming.js';
+import { isEntryAllowed } from '../../src/analysis/entryTiming.js';
 import { isFinishedGame } from '../../src/analysis/signalSettlement.js';
 import { persistApprovedSignal } from '../signals.js';
 import { fetchTotalCornerToday, totalCornerRowsToFixtures } from './totalCorner.js';
@@ -39,7 +39,7 @@ export async function claimAutomationRun(db, time = Date.now()) {
 export function selectAutomationEntries(games, markets, cursor=0) {
   const allowed = new Set(markets), seen = new Set();
   const candidates = games.filter(game => {
-    if (!allowed.has(game.market) || game.status !== 'Entrada' || isFinishedGame(game) || !isEntryTimingAllowed(game) || !game.key || seen.has(game.key)) return false;
+    if (!allowed.has(game.market) || game.status !== 'Entrada' || isFinishedGame(game) || !isEntryAllowed(game) || !game.key || seen.has(game.key)) return false;
     seen.add(game.key);
     return true;
   }).sort((a,b)=>Number(b.confidence||0)-Number(a.confidence||0));

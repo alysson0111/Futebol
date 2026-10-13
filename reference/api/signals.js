@@ -5,7 +5,7 @@ import { isFinishedGame, buildFinalSignalUpdate } from "../src/analysis/signalSe
 import { selectResultDates, findResultGame } from "./_lib/signalResultLookup.js";
 import { deliverEntry } from './_lib/telegram.js';
 import { createHash } from 'node:crypto';
-import { isEntryTimingAllowed } from '../src/analysis/entryTiming.js';
+import { isEntryTimingAllowed, isScoreTied } from '../src/analysis/entryTiming.js';
 
 const SIGNAL_COLLECTION = 'central_sinais';
 
@@ -322,9 +322,11 @@ async function listSignals(req, res) {
 
 export function prepareSignal(input) {
   const reject = (status,message) => { throw Object.assign(new Error(message), {status}); };
+  const eligibilityGame = {...input,market:input.analise?.mercado || input.market};
   if (input.sendTelegram !== undefined && typeof input.sendTelegram !== 'boolean') reject(400,'Selecao de envio ao Telegram invalida.');
   if (isFinishedGame(input)) reject(409,'Partida encerrada: nenhuma nova entrada pode ser enviada.');
-  if (!isEntryTimingAllowed(input)) reject(409,'Over +0.5 e ML: entradas somente ao vivo a partir dos 43 minutos, com minuto confirmado.');
+  if (!isEntryTimingAllowed(eligibilityGame)) reject(409,'Over +0.5 e ML: entradas somente ao vivo a partir dos 43 minutos, com minuto confirmado.');
+  if (eligibilityGame.market === 'ml' && !isScoreTied(input)) reject(409,'ML: entrada somente com placar empatado e confirmado.');
   if (!(input.analise?.entrada === true || input.status === 'Entrada')) reject(400,'Somente entradas aprovadas podem ser enviadas.');
   const record = cleanSignal(input);
   record.telegramEnabled = input.sendTelegram !== false;

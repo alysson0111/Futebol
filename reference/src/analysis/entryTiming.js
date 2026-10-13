@@ -19,13 +19,35 @@ export function isEntryTimingAllowed(game) {
   return entryMinute(game) !== null && entryMinute(game) >= MIN_ENTRY_MINUTE;
 }
 
+export function isScoreTied(game) {
+  const text = String(game.scoreText ?? '').trim();
+  const match = text.match(/^(\d+)\s*(?:x|\u00d7|:|-)\s*(\d+)$/i);
+  const home = game.homeGoals ?? game.goals?.home;
+  const away = game.awayGoals ?? game.goals?.away;
+  const valid = value => value !== null && value !== undefined && value !== '' && /^\d+$/.test(String(value)) && Number.isSafeInteger(Number(value));
+  if (text && !match) return false;
+  if (match) {
+    if ((home != null && (!valid(home) || Number(home) !== Number(match[1]))) || (away != null && (!valid(away) || Number(away) !== Number(match[2])))) return false;
+    return Number.isSafeInteger(Number(match[1])) && Number(match[1]) === Number(match[2]);
+  }
+  return valid(home) && valid(away) && Number(home) === Number(away);
+}
+
+export function isEntryAllowed(game) {
+  return isEntryTimingAllowed(game) && (game.market !== 'ml' || isScoreTied(game));
+}
+
 export function enforceEntryTiming(game) {
-  if (isEntryTimingAllowed(game)) return game;
+  if (isEntryAllowed(game)) return game;
   const minute = entryMinute(game);
   return {
     ...game,
     status: 'Observar',
     signals: [],
-    stats: [...(game.stats || []), `NAO | Entrada a partir de ${MIN_ENTRY_MINUTE} minutos | ${minute === null ? 'Minuto indisponivel' : `${minute}'`}`]
+    stats: [
+      ...(game.stats || []),
+      ...(!isEntryTimingAllowed(game) ? [`NAO | Entrada a partir de ${MIN_ENTRY_MINUTE} minutos | ${minute === null ? 'Minuto indisponivel' : `${minute}'`}`] : []),
+      ...(game.market === 'ml' && !isScoreTied(game) ? [`NAO | Placar empatado para ML | ${game.scoreText || 'Placar indisponivel'}`] : [])
+    ]
   };
 }
