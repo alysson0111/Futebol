@@ -60,7 +60,12 @@ jobs:
           if(!auth.ok)throw new Error('Falha de autenticacao do workflow.');
           const {value:token}=await auth.json();
           console.log(`::add-mask::${token}`);
-          const response=await fetch(url,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:'{}',redirect:'error',signal:AbortSignal.timeout(70000)});
+          let response;
+          for(let attempt=0;attempt<5;attempt++) {
+            response=await fetch(url,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:'{}',redirect:'error',signal:AbortSignal.timeout(70000)});
+            if(![401,404].includes(response.status)||attempt===4)break;
+            await new Promise(resolve=>setTimeout(resolve,15000));
+          }
           const result=await response.json();
           console.log(JSON.stringify(result));
           if(!response.ok||result.errors?.length)throw new Error('Falha ao confirmar alguns resultados; confira o resumo desta execucao.');
