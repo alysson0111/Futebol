@@ -1,4 +1,5 @@
 const TOTALCORNER_TODAY_URL = "https://www.totalcorner.com/pt/match/today";
+const TOTALCORNER_ENDED_URL = `${TOTALCORNER_TODAY_URL}/ended`;
 
 function totalCornerDateUrl(dateIso) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateIso)) throw new Error("Data de resultados invalida.");
@@ -357,8 +358,8 @@ export function mergeTotalCornerRows(rows, totalCornerRows) {
   });
 }
 
-export function resultPageLinks(markdown, dateIso) {
-  const base = new URL(totalCornerDateUrl(dateIso));
+export function resultPageLinks(markdown, dateIso, sourceUrl = totalCornerDateUrl(dateIso)) {
+  const base = new URL(sourceUrl);
   const links = new Set();
   for (const match of String(markdown).matchAll(/\]\((https:\/\/www\.totalcorner\.com\/[^\s)]+)\)/g)) {
     const url = new URL(match[1]);
@@ -369,7 +370,7 @@ export function resultPageLinks(markdown, dateIso) {
   return [...links].slice(0, 8);
 }
 
-async function fetchTotalCornerPage(url, expectedDate) {
+async function fetchTotalCornerPage(url, expectedDate, sourceUrl = url) {
   const response = await fetch(readerUrl(url), {
     signal: AbortSignal.timeout(20000),
     headers: {
@@ -387,7 +388,7 @@ async function fetchTotalCornerPage(url, expectedDate) {
   if (expectedDate && !pageDates.includes(expectedDate)) {
     throw new Error(`TotalCorner nao confirmou a data ${expectedDate} na pagina de resultados.`);
   }
-  return { rows: parseTotalCornerMarkdown(markdown), pages: expectedDate ? resultPageLinks(markdown, expectedDate) : [] };
+  return { rows: parseTotalCornerMarkdown(markdown), pages: expectedDate ? resultPageLinks(markdown, expectedDate, sourceUrl) : [] };
 }
 
 export async function fetchTotalCornerToday() {
@@ -395,16 +396,20 @@ export async function fetchTotalCornerToday() {
 }
 
 export async function fetchTotalCornerDate(dateIso) {
-  const first = await fetchTotalCornerPage(totalCornerDateUrl(dateIso), dateIso);
+  return fetchTotalCornerResultPages(totalCornerDateUrl(dateIso), dateIso);
+}
+
+async function fetchTotalCornerResultPages(sourceUrl, dateIso) {
+  const first = await fetchTotalCornerPage(sourceUrl, dateIso, sourceUrl);
   const rows = [...first.rows];
   const errors = [];
-  const visited = new Set([totalCornerDateUrl(dateIso)]);
+  const visited = new Set([sourceUrl]);
   let pages = first.pages;
   while (pages.length && visited.size <= 8) {
     const batch = pages.filter(url => !visited.has(url)).slice(0, Math.min(4, 9 - visited.size));
     if (!batch.length) break;
     batch.forEach(url => visited.add(url));
-    const responses = await Promise.allSettled(batch.map(url => fetchTotalCornerPage(url, dateIso)));
+    const responses = await Promise.allSettled(batch.map(url => fetchTotalCornerPage(url, dateIso, sourceUrl)));
     const results = responses.filter(result => result.status === 'fulfilled').map(result => result.value);
     responses.filter(result => result.status === 'rejected').forEach(result => errors.push(result.reason?.message || 'Falha em pagina adicional de resultados.'));
     results.forEach(page => rows.push(...page.rows));
@@ -413,4 +418,26 @@ export async function fetchTotalCornerDate(dateIso) {
   const output = rows.map((row) => ({ ...row, dateIso }));
   output.coverageErrors = errors;
   return output;
+}
+
+export async function fetchTotalCornerResultsDate(dateIso) {
+  // A relative "today" page is never used to settle historical signals.
+  if (dateIso !== getSaoPauloDateIso()) return fetchTotalCornerDate(dateIso);
+  const results = await Promise.allSettled([
+    fetchTotalCornerResultPages(TOTALCORNER_ENDED_URL, dateIso),
+    fetchTotalCornerDate(dateIso)
+  ]);
+  const rows = [];
+  const errors = [];
+  results.forEach((result, index) => {
+    const label = index === 0 ? 'Jogos encerrados' : 'Agenda por data';
+    if (result.status === 'rejected') errors.push(`${label}: ${result.reason?.message || 'Falha na consulta.'}`);
+    else {
+      rows.push(...result.value);
+      errors.push(...result.value.coverageErrors.map(error => `${label}: ${error}`));
+    }
+  });
+  if (results.every(result => result.status === 'rejected')) throw new Error(errors.join(' | '));
+  rows.coverageErrors = errors;
+  return rows;
 }

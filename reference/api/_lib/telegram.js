@@ -9,7 +9,8 @@ function failure(body, status) {
     : 'Telegram recusou o envio. Verifique token, chat e permissoes do bot.';
   return {status:'falhou',code,error};
 }
-export async function deliverEntry(record) {
+export async function deliverEntry(record, { enabled = true } = {}) {
+  if (enabled !== true) return { status: 'desativado', reason: 'Mercado desmarcado para envio.' };
   const token = process.env.TELEGRAM_BOT_TOKEN, chat = process.env.TELEGRAM_CHAT_ID;
   if (!token || !chat) return { status: 'nao-configurado' };
   const text = [record.marketLabel, `${record.home} x ${record.away}`, record.league,

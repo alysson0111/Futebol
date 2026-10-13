@@ -1,6 +1,6 @@
 import { getDb, now } from "./_lib/firebase.js";
 import { analyzeFixtures } from "./_lib/scanner.js";
-import { fetchTotalCornerDate, totalCornerRowsToFixtures } from "./_lib/totalCorner.js";
+import { fetchTotalCornerResultsDate, totalCornerRowsToFixtures } from "./_lib/totalCorner.js";
 import { isFinishedGame, buildFinalSignalUpdate } from "../src/analysis/signalSettlement.js";
 import { selectResultDates, findResultGame } from "./_lib/signalResultLookup.js";
 import { deliverEntry } from './_lib/telegram.js';
@@ -10,6 +10,7 @@ const SIGNAL_COLLECTION = 'central_sinais';
 
 const FINISHED_STATUSES = new Set(["FT", "AET", "PEN"]);
 const SIGNALS_READ_LIMIT = 2000;
+const PENDING_READ_LIMIT = 100;
 
 function send(res, status, body) {
   res.statusCode = status;
@@ -229,7 +230,7 @@ export async function settleSignalsFromTotalCorner(db, signals, cursor = 0) {
   const plan = selectResultDates(pending, cursor);
   const settlementStatus = { updated: 0, errors: [], checkedDates: plan.dates, nextCursor: plan.nextCursor };
   try {
-    const rowResults = await Promise.allSettled(plan.dates.map((dateIso) => fetchTotalCornerDate(dateIso)));
+    const rowResults = await Promise.allSettled(plan.dates.map((dateIso) => fetchTotalCornerResultsDate(dateIso)));
     rowResults.forEach((result, index) => {
       if (result.status === "rejected") settlementStatus.errors.push(`${plan.dates[index]}: ${result.reason?.message || "Falha ao buscar resultado"}`);
       else if (!result.value.length) settlementStatus.errors.push(`${plan.dates[index]}: fonte sem jogos legiveis`);
@@ -269,13 +270,13 @@ export async function settleSignalsFromTotalCorner(db, signals, cursor = 0) {
 }
 
 export async function readPendingSignals(db, cursor = '') {
-  let query = db.collection(SIGNAL_COLLECTION).where('result', '==', 'pendente').orderBy('__name__').limit(1000);
+  let query = db.collection(SIGNAL_COLLECTION).where('result', '==', 'pendente').orderBy('__name__').limit(PENDING_READ_LIMIT);
   if (/^[a-zA-Z0-9_-]{1,128}$/.test(cursor)) query = query.startAfter(cursor);
   let snapshot = await query.get();
-  if (!snapshot.size && cursor) snapshot = await db.collection(SIGNAL_COLLECTION).where('result', '==', 'pendente').orderBy('__name__').limit(1000).get();
+  if (!snapshot.size && cursor) snapshot = await db.collection(SIGNAL_COLLECTION).where('result', '==', 'pendente').orderBy('__name__').limit(PENDING_READ_LIMIT).get();
   return {
     signals: snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })),
-    nextCursor: snapshot.size === 1000 ? snapshot.docs.at(-1).id : ''
+    nextCursor: snapshot.size === PENDING_READ_LIMIT ? snapshot.docs.at(-1).id : ''
   };
 }
 
@@ -321,9 +322,11 @@ async function listSignals(req, res) {
 async function saveSignal(req, res) {
   const db = getDb();
   const input = readBody(req);
+  if (input.sendTelegram !== undefined && typeof input.sendTelegram !== 'boolean') return send(res, 400, { error: 'Selecao de envio ao Telegram invalida.' });
   if (isFinishedGame(input)) return send(res, 409, { error: 'Partida encerrada: nenhuma nova entrada pode ser enviada.' });
   if (!(input.analise?.entrada === true || input.status === 'Entrada')) return send(res, 400, { error: 'Somente entradas aprovadas podem ser enviadas.' });
   const record = cleanSignal(input);
+  record.telegramEnabled = input.sendTelegram !== false;
   if (!record.key || !record.home || !record.away || !record.market) {
     return send(res, 400, { error: "Sinal incompleto." });
   }
@@ -338,7 +341,7 @@ async function saveSignal(req, res) {
   });
   if (previous) return send(res, 200, { id: doc.id, ...previous, duplicate: true });
 
-  const delivery = await deliverEntry(record);
+  const delivery = await deliverEntry(record, { enabled: record.telegramEnabled });
   await doc.update({ telegram: delivery });
   send(res, 200, { id: doc.id, ...record, telegram: delivery });
 }

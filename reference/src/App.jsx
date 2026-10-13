@@ -11,6 +11,8 @@ import { usePrematchGames } from "./hooks/usePrematchGames.js";
 import { useGameAnalysis } from "./hooks/useGameAnalysis.js";
 import { deleteSignal, listSignals, saveSignal, updateSignalResult } from "./firebase/firebase.js";
 import { setApiAccessToken } from './api/serverApi.js';
+import { analisarMercado } from './analysis/index.js';
+import { TELEGRAM_MARKETS, loadTelegramMarkets, persistTelegramMarkets, isTelegramMarketSelected } from './analysis/telegramMarkets.js';
 
 const styles = `
   :root {
@@ -75,6 +77,11 @@ const styles = `
   .check-field { align-content: end; }
   .check-label { min-height: 40px; border: 1px solid var(--line); border-radius: 8px; background: #fff; display: flex; align-items: center; gap: 8px; padding: 0 10px; color: var(--ink); font-size: 13px; font-weight: 700; }
   .check-label input { width: 16px; min-height: 16px; padding: 0; }
+  .telegram-markets { margin: 0; padding: 12px 0 0; border: 0; border-top: 1px solid rgba(255,255,255,.18); min-width: 0; display: grid; gap: 8px; }
+  .telegram-markets legend { padding: 0 0 8px; color: #f7fff9; font-size: 13px; font-weight: 700; }
+  .telegram-market { display: flex; gap: 10px; align-items: center; min-height: 30px; font-size: 13px; cursor: pointer; }
+  .telegram-market input { width: 17px; height: 17px; margin: 0; flex-shrink: 0; accent-color: #24b47e; }
+  @media (prefers-reduced-motion: reduce) { .nav button.has-signal { animation: none; } }
   .metric { padding: 16px; }
   .metric span { color: var(--muted); font-size: 12px; font-weight: 700; text-transform: uppercase; }
   .metric strong { display: block; margin-top: 8px; font-size: 28px; line-height: 1; }
@@ -170,6 +177,11 @@ export default function App() {
   const [liveInterval, setLiveInterval] = useState(300000);
   const [accessToken, setAccessToken] = useState('');
   const [autoSave, setAutoSave] = useState(false);
+  const [telegramMarkets, setTelegramMarkets] = useState(() => {
+    try { return loadTelegramMarkets(window.localStorage); } catch { return []; }
+  });
+  const telegramMarketsRef = useRef(telegramMarkets);
+  telegramMarketsRef.current = telegramMarkets;
   const [reportRefresh, setReportRefresh] = useState(0);
   const [filters, setFilters] = useState({ league: "all", market: "all", minConfidence: 0, minOdd: 0, search: "", mostrarApenasAprovados: false });
   const [signals, setSignals] = useState([]);
@@ -186,6 +198,11 @@ export default function App() {
   const updatedAt = selectedPage === "prematch" ? prematch.updatedAt : live.updatedAt;
   const statusText = selectedPage === "prematch" ? prematch.statusText : live.statusText;
   const analysis = useGameAnalysis(sourceGames, { ...filters, market: selectedMarket !== "all" ? selectedMarket : filters.market });
+  const automaticGames = useMemo(() => sourceGames.map(game => ({ ...game, analise: analisarMercado(game) })), [sourceGames]);
+
+  useEffect(() => {
+    try { persistTelegramMarkets(window.localStorage, telegramMarkets); } catch { /* Storage may be disabled. */ }
+  }, [telegramMarkets]);
 
   useEffect(() => {
     live.start().catch((error) => {
@@ -236,7 +253,7 @@ export default function App() {
 
   useEffect(() => {
     if (!autoSave || !accessToken) return;
-    const entries = analysis.filteredGames.filter((game) => {
+    const entries = automaticGames.filter((game) => {
       const isSignal = game.analise?.entrada || game.status === "Entrada";
       return isSignal && !isFinishedGame(game) && game.key && !savedSignalKeysRef.current.has(game.key);
     });
@@ -246,9 +263,10 @@ export default function App() {
     async function autoSaveSignals() {
       let savedCount = 0;
       for (const game of entries) {
+        if (cancelled) break;
         try {
           savedSignalKeysRef.current.add(game.key);
-          const saved = await saveSignal(game);
+          const saved = await saveSignal(game, { sendTelegram: isTelegramMarketSelected(game.market, telegramMarketsRef.current) });
           if (cancelled) return;
           setSignals((current) => {
             const exists = current.some((signal) => signal.id === saved.id || signal.key === saved.key);
@@ -270,7 +288,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [analysis.filteredGames, autoSave, accessToken]);
+  }, [automaticGames, autoSave, accessToken]);
 
   useEffect(() => {
     const gamesBySource = new Map();
@@ -402,7 +420,16 @@ export default function App() {
             <label htmlFor="accessToken">Token de envio</label>
             <input id="accessToken" type="password" autoComplete="off" value={accessToken} onChange={(event) => { setApiAccessToken(event.target.value); setAccessToken(event.target.value); }} />
           </div>
-          <label className="check-label"><input type="checkbox" checked={autoSave} disabled={!accessToken} onChange={(event) => setAutoSave(event.target.checked)} />Salvar e enviar entradas</label>
+          <label className="check-label"><input type="checkbox" checked={autoSave} disabled={!accessToken} onChange={(event) => setAutoSave(event.target.checked)} />Salvar entradas automaticamente</label>
+          <fieldset className="telegram-markets">
+            <legend>Mercados no Telegram</legend>
+            {TELEGRAM_MARKETS.map(([market, label]) => (
+              <label className="telegram-market" key={market}>
+                <input type="checkbox" aria-label={`Enviar ${label} ao Telegram`} checked={telegramMarkets.includes(market)} onChange={(event) => setTelegramMarkets(current => event.target.checked ? [...current, market] : current.filter(id => id !== market))} />
+                {label}
+              </label>
+            ))}
+          </fieldset>
           <p>Confiabilidade: pontuação do scanner, não probabilidade de acerto.</p>
         </aside>
         {renderPage()}

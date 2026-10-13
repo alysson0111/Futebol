@@ -46,11 +46,11 @@ test("pending rotation revisits every signal and skips confirmed results", () =>
 
 test('server recovery reads pending records independently of browser IDs and rotates full pages', async () => {
   const calls = [];
-  const docs = Array.from({length:1000},(_,i)=>({id:`id${i}`,data:()=>({result:'pendente'})}));
-  const query = { where(...args){calls.push(args);return this;}, orderBy(...args){calls.push(args);return this;},limit(n){assert.equal(n,1000);return this;},startAfter(value){calls.push(['cursor',value]);return this;},async get(){return {docs,size:docs.length};} };
+  const docs = Array.from({length:100},(_,i)=>({id:`id${i}`,data:()=>({result:'pendente'})}));
+  const query = { where(...args){calls.push(args);return this;}, orderBy(...args){calls.push(args);return this;},limit(n){assert.equal(n,100);return this;},startAfter(value){calls.push(['cursor',value]);return this;},async get(){return {docs,size:docs.length};} };
   const result = await readPendingSignals({collection:()=>query}, 'previous');
-  assert.equal(result.signals.length,1000);
-  assert.equal(result.nextCursor,'id999');
+  assert.equal(result.signals.length,100);
+  assert.equal(result.nextCursor,'id99');
   assert.deepEqual(calls[0],['result','==','pendente']);
   assert.ok(calls.some(call=>call[0]==='cursor'));
 });

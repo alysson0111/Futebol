@@ -10,10 +10,10 @@ export function listSignals(cursor = 0, since = "", pendingIds = [], pendingCurs
   return apiJson(`/api/signals?${query}`);
 }
 
-export function saveSignal(signal) {
+export function saveSignal(signal, { sendTelegram = true } = {}) {
   return apiJson("/api/signals", {
     method: "POST",
-    body: JSON.stringify(signal)
+    body: JSON.stringify({ ...signal, sendTelegram })
   });
 }
 

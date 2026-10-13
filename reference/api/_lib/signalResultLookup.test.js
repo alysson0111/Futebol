@@ -2,9 +2,62 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { selectResultDates, findResultGame } from "./signalResultLookup.js";
 import { mergeReportSignals } from "../../src/analysis/reportSignals.js";
-import { parseTotalCornerMarkdown, totalCornerRowsToFixtures, fetchTotalCornerDate, resultPageLinks } from "./totalCorner.js";
+import { parseTotalCornerMarkdown, totalCornerRowsToFixtures, fetchTotalCornerDate, fetchTotalCornerResultsDate, resultPageLinks } from "./totalCorner.js";
 import { analyzeFixtures } from "./scanner.js";
 import { buildFinalSignalUpdate } from "../../src/analysis/signalSettlement.js";
+
+function todayIso() {
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
+  const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+test('today settlement reads ended pages and retains results when the schedule fails', async () => {
+  const original = globalThis.fetch;
+  const date = todayIso();
+  const calls = [];
+  try {
+    globalThis.fetch = async url => {
+      calls.push(String(url));
+      if (String(url).includes('/schedule/')) return { ok: false, status: 401 };
+      const page2 = String(url).includes('page=2');
+      return { ok: true, text: async () => `# Jogos encerrados\n${date}\nLiga\n${page2 ? '09:00 FT C 0 - 0 D' : '08:00 FT A 2 - 1 B\n[2](https://www.totalcorner.com/pt/match/today/ended?page=2)'}` };
+    };
+    const rows = await fetchTotalCornerResultsDate(date);
+    assert.equal(rows.length, 2);
+    assert.ok(calls.some(url => url.includes('/today/ended?page=2')));
+    assert.match(rows.coverageErrors[0], /Agenda por data.*401/);
+    assert.ok(rows.every(row => row.dateIso === date));
+    const games = analyzeFixtures({ response: totalCornerRowsToFixtures(rows) });
+    assert.equal(buildFinalSignalUpdate({ market: 'over25' }, games.find(game => game.home === 'A' && game.market === 'over25')).result, 'green');
+  } finally { globalThis.fetch = original; }
+});
+
+test('ended page with another date is rejected without inferring FT from the URL', async () => {
+  const original = globalThis.fetch;
+  const date = todayIso();
+  try {
+    globalThis.fetch = async url => ({ ok: true, text: async () => String(url).includes('/ended')
+      ? '# Jogos encerrados\n2000-01-01\nLiga\n08:00 FT A 3 - 0 B'
+      : `# Agenda\n${date}\nLiga\n08:00 60 A 0 - 0 B` });
+    const rows = await fetchTotalCornerResultsDate(date);
+    assert.equal(rows.length, 1);
+    assert.match(rows.coverageErrors[0], /nao confirmou a data/);
+    const game = analyzeFixtures({ response: totalCornerRowsToFixtures(rows) })[0];
+    assert.equal(buildFinalSignalUpdate({ market: 'over05' }, game), null);
+  } finally { globalThis.fetch = original; }
+});
+
+test('historical settlement never consults the relative ended page', async () => {
+  const original = globalThis.fetch;
+  try {
+    globalThis.fetch = async url => {
+      assert.ok(String(url).includes('/schedule/20000101'));
+      return { ok: true, text: async () => '# Agenda\n2000-01-01\nLiga\n08:00 FT A 1 - 0 B' };
+    };
+    assert.equal((await fetchTotalCornerResultsDate('2000-01-01'))[0].dateIso, '2000-01-01');
+  } finally { globalThis.fetch = original; }
+});
 
 test('dated recovery follows explicit pagination only for the requested date', async () => {
   const original=globalThis.fetch;
