@@ -374,9 +374,9 @@ export function resultPageLinks(markdown, dateIso, sourceUrl = totalCornerDateUr
   return [...links].slice(0, 8);
 }
 
-async function fetchTotalCornerPage(url, expectedDate, sourceUrl = url) {
+async function fetchTotalCornerPage(url, expectedDate, sourceUrl = url, deadline = Date.now()+20000) {
   const response = await fetch(readerUrl(url), {
-    signal: AbortSignal.timeout(20000),
+    signal: AbortSignal.timeout(Math.max(1,Math.min(20000,deadline-Date.now()))),
     headers: {
       "User-Agent": "Mozilla/5.0 Analise-Futebol/1.0",
       "Cache-Control": "no-cache",
@@ -406,17 +406,19 @@ export async function fetchTotalCornerDate(dateIso) {
 }
 
 async function fetchTotalCornerResultPages(sourceUrl, dateIso) {
-  const first = await fetchTotalCornerPage(sourceUrl, dateIso, sourceUrl);
+  const deadline=Date.now()+45000;
+  const first = await fetchTotalCornerPage(sourceUrl, dateIso, sourceUrl,deadline);
   const rows = [...first.rows];
   const errors = [];
   if(first.rows.length>=400&&!first.pages.length)errors.push('Agenda com 400 ou mais jogos sem links de paginacao: cobertura possivelmente incompleta.');
   const visited = new Set([sourceUrl]);
   let pages = first.pages;
   while (pages.length && visited.size <= 8) {
+    if(Date.now()>=deadline){errors.push('Tempo de coleta esgotado: paginas restantes serao consultadas novamente.');break;}
     const batch = pages.filter(url => !visited.has(url)).slice(0, Math.min(4, 9 - visited.size));
     if (!batch.length) break;
     batch.forEach(url => visited.add(url));
-    const responses = await Promise.allSettled(batch.map(url => fetchTotalCornerPage(url, dateIso, sourceUrl)));
+    const responses = await Promise.allSettled(batch.map(url => fetchTotalCornerPage(url, dateIso, sourceUrl,deadline)));
     const results = responses.filter(result => result.status === 'fulfilled').map(result => result.value);
     responses.filter(result => result.status === 'rejected').forEach(result => errors.push(result.reason?.message || 'Falha em pagina adicional de resultados.'));
     results.forEach(page => rows.push(...page.rows));
