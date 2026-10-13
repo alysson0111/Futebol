@@ -8,6 +8,10 @@ test('pagination accepts relative links but never another date or origin',()=>{
   assert.deepEqual(resultPageLinks('[2](/pt/match/schedule/20261010/page:2) [3](https://evil.example/pt/match/schedule/20261010/page:3) [4](/pt/match/schedule/20261009/page:4)','2026-10-10'),['https://www.totalcorner.com/pt/match/schedule/20261010/page:2']);
 });
 
+test('pagination reads link summaries and encoded page separators',()=>{
+  assert.deepEqual(resultPageLinks('Buttons & Links:\n2: https://www.totalcorner.com/pt/match/schedule/20261010/page%3A2','2026-10-10'),['https://www.totalcorner.com/pt/match/schedule/20261010/page:2']);
+});
+
 test('legacy minutes and card counts require an unambiguous final match',()=>{
   const signal={home:"Woking56'",away:'Leicester Sub21',league:'Liga',dateText:'13/10/2026',market:'ml',sourceId:'old-18:45'};
   const final={...signal,home:'Woking',away:'Leicester Sub21 4',time:'18:45',sourceId:'new',apiStatus:'FT',scoreText:'2x2'};

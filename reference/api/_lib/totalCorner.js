@@ -362,9 +362,11 @@ export function mergeTotalCornerRows(rows, totalCornerRows) {
 export function resultPageLinks(markdown, dateIso, sourceUrl = totalCornerDateUrl(dateIso)) {
   const base = new URL(sourceUrl);
   const links = new Set();
-  for (const match of String(markdown).matchAll(/\]\(([^\s)]+)\)/g)) {
+  const hrefs = [...String(markdown).matchAll(/\]\(([^\s)]+)\)/g)].map(match=>match[1]);
+  hrefs.push(...[...String(markdown).matchAll(/https:\/\/www\.totalcorner\.com\/[^\s)<>]+/g)].map(match=>match[0]));
+  for (const href of hrefs) {
     let url;
-    try { url = new URL(match[1], base); } catch { continue; }
+    try { url = new URL(href, base); url.pathname=decodeURIComponent(url.pathname); } catch { continue; }
     if (url.origin !== base.origin || !(url.pathname === base.pathname || url.pathname.startsWith(base.pathname + '/'))) continue;
     const suffix = url.pathname.slice(base.pathname.length);
     if ((suffix && /^\/(?:page[:/]?)?\d+\/?$/.test(suffix)) || [...url.searchParams.keys()].some(key => /^(page|p|offset)$/i.test(key))) links.add(url.href);
@@ -380,6 +382,8 @@ async function fetchTotalCornerPage(url, expectedDate, sourceUrl = url) {
       "Cache-Control": "no-cache",
       Pragma: "no-cache",
       "X-No-Cache": "true",
+      "X-With-Links-Summary": "true",
+      "X-Md-Link-Style": "inlined",
       ...(process.env.JINA_API_KEY ? { Authorization: `Bearer ${process.env.JINA_API_KEY}` } : {})
     }
   });
@@ -405,6 +409,7 @@ async function fetchTotalCornerResultPages(sourceUrl, dateIso) {
   const first = await fetchTotalCornerPage(sourceUrl, dateIso, sourceUrl);
   const rows = [...first.rows];
   const errors = [];
+  if(first.rows.length>=400&&!first.pages.length)errors.push('Agenda com 400 ou mais jogos sem links de paginacao: cobertura possivelmente incompleta.');
   const visited = new Set([sourceUrl]);
   let pages = first.pages;
   while (pages.length && visited.size <= 8) {

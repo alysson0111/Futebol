@@ -41,8 +41,13 @@ function addTotalCornerStats(game, source) {
 
 async function fetchTotalCornerGames(dates = []) {
   const totalCornerRows = [];
+  const coverageErrors = [];
   if (dates.length) {
-    for (const date of dates) totalCornerRows.push(...await fetchTotalCornerDate(date));
+    for (const date of dates) {
+      const rows=await fetchTotalCornerDate(date);
+      totalCornerRows.push(...rows);
+      coverageErrors.push(...(rows.coverageErrors||[]).map(error=>`${date}: ${error}`));
+    }
   } else totalCornerRows.push(...await fetchTotalCornerToday());
   const rows = totalCornerRowsToFixtures(totalCornerRows);
   const analyzedRows = analyzeFixtures({ response: rows });
@@ -57,6 +62,7 @@ async function fetchTotalCornerGames(dates = []) {
     marketRows: games.length,
     source: "TotalCorner",
     totalCornerCount: totalCornerRows.length,
+    coverageErrors,
     games
   };
 }
