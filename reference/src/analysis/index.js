@@ -6,6 +6,7 @@ import { under35 } from "./under35.js";
 import { corners } from "./corners.js";
 import { handicap } from "./handicap.js";
 import { ml } from "./ml.js";
+import { isEntryTimingAllowed } from './entryTiming.js';
 
 export const markets = {
   over05,
@@ -29,7 +30,7 @@ export function analisarMercado(jogo, mercadoSelecionado = "all") {
   const odd = Number(jogo.odd || 0);
   const sinais = Array.isArray(jogo.stats) ? jogo.stats : [];
   const dadosJogo = Array.isArray(jogo.dadosJogo) ? jogo.dadosJogo : [];
-  const entrada = statusOriginal === "Entrada";
+  const entrada = statusOriginal === "Entrada" && isEntryTimingAllowed(jogo);
 
   return {
     mercado,

@@ -5,6 +5,7 @@ import { isFinishedGame, buildFinalSignalUpdate } from "../src/analysis/signalSe
 import { selectResultDates, findResultGame } from "./_lib/signalResultLookup.js";
 import { deliverEntry } from './_lib/telegram.js';
 import { createHash } from 'node:crypto';
+import { isEntryTimingAllowed } from '../src/analysis/entryTiming.js';
 
 const SIGNAL_COLLECTION = 'central_sinais';
 
@@ -320,10 +321,10 @@ async function listSignals(req, res) {
 }
 
 async function saveSignal(req, res) {
-  const db = getDb();
   const input = readBody(req);
   if (input.sendTelegram !== undefined && typeof input.sendTelegram !== 'boolean') return send(res, 400, { error: 'Selecao de envio ao Telegram invalida.' });
   if (isFinishedGame(input)) return send(res, 409, { error: 'Partida encerrada: nenhuma nova entrada pode ser enviada.' });
+  if (!isEntryTimingAllowed(input)) return send(res, 409, { error: 'Over +0.5 e ML: entradas somente ao vivo a partir dos 43 minutos, com minuto confirmado.' });
   if (!(input.analise?.entrada === true || input.status === 'Entrada')) return send(res, 400, { error: 'Somente entradas aprovadas podem ser enviadas.' });
   const record = cleanSignal(input);
   record.telegramEnabled = input.sendTelegram !== false;
@@ -332,6 +333,7 @@ async function saveSignal(req, res) {
   }
 
   if (!Number.isFinite(record.confidence) || record.confidence <= 0 || record.confidence > 100 || !record.signalLines.length) return send(res, 400, { error: 'Entrada sem confiabilidade ou sinal valido.' });
+  const db = getDb();
   const doc = db.collection(SIGNAL_COLLECTION).doc(createHash('sha256').update(record.key).digest('hex'));
   const previous = await db.runTransaction(async transaction => {
     const snapshot = await transaction.get(doc);

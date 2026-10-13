@@ -1,3 +1,5 @@
+import { isEntryTimingAllowed, MIN_ENTRY_MINUTE } from '../../src/analysis/entryTiming.js';
+
 const MARKETS = ["over05", "over15", "over25", "under25", "under35", "corners", "handicap", "ml"];
 
 const MARKET_LABELS = {
@@ -94,8 +96,10 @@ function scanMl(game) {
     || fromScore === pick
     || (elapsed < 60 && favoriteStrength >= 0.75);
   const lateGameSafe = elapsed === 0 || elapsed < 70 || fromScore === pick;
-  const passed = hasTotalCorner && hasPrediction && confidence >= 68 && scoreConfirmsPick && lateGameSafe;
+  const timingOk = isEntryTimingAllowed(game);
+  const passed = timingOk && hasTotalCorner && hasPrediction && confidence >= 68 && scoreConfirmsPick && lateGameSafe;
   const checks = [
+    item(`Entrada a partir de ${MIN_ENTRY_MINUTE} minutos`, timingOk, game.liveStatus || game.apiStatus || "Minuto indisponivel"),
     item("IA confrontou dados do TotalCorner", hasTotalCorner, hasTotalCorner ? "ok" : "indisponivel", hasTotalCorner),
     item("Vencedor previsto", hasPrediction, mlLabel(pick, game), hasPrediction),
     item("Confianca ML >= 68%", confidence >= 68, confidence ? `${Math.round(confidence)}%` : "indisponivel", Boolean(confidence)),
@@ -146,7 +150,7 @@ function scanOver05(game) {
   }
 
   const { elapsed, goalLine, cornerPressure, handicapAbs, hasTotalCorner } = gameContext(game);
-  const usefulMinute = elapsed >= 15 && elapsed <= 70;
+  const usefulMinute = isEntryTimingAllowed(game) && elapsed >= MIN_ENTRY_MINUTE && elapsed <= 70;
   const goalLineOk = goalLine >= 2;
   const pressureOk = cornerPressure >= 5;
   const noExtremeFavorite = handicapAbs <= 1.75;
@@ -154,7 +158,7 @@ function scanOver05(game) {
     item("IA confrontou dados do TotalCorner", hasTotalCorner, hasTotalCorner ? "ok" : "indisponivel", hasTotalCorner),
     item("Placar 0x0 para buscar primeiro gol", game.totalGoals === 0, game.scoreText || "-", true),
     item("Linha de gols favorece +0.5", goalLineOk, goalLine ? goalLine.toFixed(2) : "indisponivel", Boolean(goalLine)),
-    item("Minuto util para entrada", usefulMinute, elapsed ? `${elapsed}'` : game.apiStatus || "-", true),
+    item("Minuto util para entrada (43 a 70)", usefulMinute, elapsed ? `${elapsed}'` : game.apiStatus || "-", true),
     item("Pressao minima por escanteios", pressureOk, `${cornerPressure.toFixed(1)}`, game.hasCorners),
     item("Sem favorito extremo travando jogo", noExtremeFavorite, Number.isFinite(Number(game.handicapLine)) ? formatHandicapLine(game.handicapLine) : "sem linha", true)
   ];
@@ -562,6 +566,7 @@ export function publicGame(game) {
     dateText: game.dateText,
     liveStatus: game.liveStatus,
     apiStatus: game.apiStatus,
+    elapsed: game.elapsed,
     scoreText: game.scoreText,
     totalGoals: game.totalGoals,
     liveCorners: game.liveCorners,

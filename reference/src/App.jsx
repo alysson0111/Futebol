@@ -254,7 +254,7 @@ export default function App() {
   useEffect(() => {
     if (!autoSave || !accessToken) return;
     const entries = automaticGames.filter((game) => {
-      const isSignal = game.analise?.entrada || game.status === "Entrada";
+      const isSignal = game.analise?.entrada === true;
       return isSignal && !isFinishedGame(game) && game.key && !savedSignalKeysRef.current.has(game.key);
     });
     if (!entries.length) return;

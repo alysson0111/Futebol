@@ -1,3 +1,5 @@
+import { enforceEntryTiming } from '../src/analysis/entryTiming.js';
+
 const FOREBET_TODAY_URL = "https://www.forebet.com/en/football-tips-and-predictions-for-today/predictions-under-over-goals";
 const FOREBET_DATE_URL = "https://www.forebet.com/en/football-predictions/under-over-25-goals";
 const FOREBET_CORNERS_TODAY_URL = "https://www.forebet.com/en/football-tips-and-predictions-for-today/corners";
@@ -312,7 +314,7 @@ function applyForebet(games, goalPredictions, cornerPredictions) {
   });
 
   return {
-    analyzedGames,
+    analyzedGames: analyzedGames.map(enforceEntryTiming),
     picksCount: picks.size,
     goalsCount: [...picks.values()].filter((pick) => pick.type === "goals").length,
     cornersCount: [...picks.values()].filter((pick) => pick.type === "corners").length
