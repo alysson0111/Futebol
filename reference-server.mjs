@@ -6,13 +6,15 @@ import { fileURLToPath } from 'node:url';
 import games from './reference/api/games.js';
 import analysis from './reference/api/forebet-analysis.js';
 import signals from './reference/api/signals.js';
+import automation from './reference/api/automation.js';
+import { authorizedScheduler } from './reference/api/_lib/schedulerAuth.js';
 const root = fileURLToPath(new URL('.', import.meta.url));
 for (const name of ['.env', '.env.local']) {
   try { process.loadEnvFile(resolve(root, name)); } catch (error) { if (error.code !== 'ENOENT') throw error; }
 }
 const send = (res, status, body) => { res.statusCode = status; res.setHeader('Content-Type', 'application/json; charset=utf-8'); res.end(JSON.stringify(body)); };
-export function authorized(req) {
-  const expected = process.env.SCANNER_ACCESS_TOKEN || '';
+export function authorized(req, tokenName = 'SCANNER_ACCESS_TOKEN') {
+  const expected = process.env[tokenName] || '';
   const supplied = String(req.headers.authorization || '').replace(/^Bearer /, '');
   return expected.length > 0 && Buffer.byteLength(expected) === Buffer.byteLength(supplied) && timingSafeEqual(Buffer.from(expected), Buffer.from(supplied));
 }
@@ -21,10 +23,12 @@ export default async function handler(req, res) {
   const url = new URL(req.url, 'http://localhost');
   res.setHeader('Cache-Control', 'no-store');
   if (url.pathname.startsWith('/api/')) {
-    const routes = { '/api/games': games, '/api/forebet-analysis': analysis, '/api/signals': signals };
+    const routes = { '/api/games': games, '/api/forebet-analysis': analysis, '/api/signals': signals, '/api/automation/settings':automation, '/api/automation/run':automation };
     if (!routes[url.pathname]) return send(res, 404, { error: 'Rota nao encontrada.' });
     // Report reads also settle results in the reference, so protect every bank operation.
     if (url.pathname === '/api/signals' && !authorized(req)) return send(res, 401, { error: 'Informe o token de envio configurado em SCANNER_ACCESS_TOKEN.' });
+    if (url.pathname === '/api/automation/settings' && !authorized(req)) return send(res,401,{error:'Informe o token de envio para configurar a automacao.'});
+    if (url.pathname === '/api/automation/run' && !authorized(req,'AUTOMATION_TOKEN') && !await authorizedScheduler(req)) return send(res,401,{error:'Agendador nao autorizado.'});
     try {
       if (['POST', 'PATCH', 'DELETE'].includes(req.method) && req.body == null) {
         let body = '';

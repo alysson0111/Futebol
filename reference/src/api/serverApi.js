@@ -7,7 +7,7 @@ export async function apiJson(url, options = {}) {
     headers: {
       "Content-Type": "application/json",
       "Cache-Control": "no-cache",
-      ...(url.startsWith('/api/signals') && accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      ...((url.startsWith('/api/signals') || url.startsWith('/api/automation/settings')) && accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
       ...(options.headers || {})
     }
   });

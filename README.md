@@ -6,6 +6,7 @@ para configuracao, fontes, protecao do banco e limites de confiabilidade.
 Executar: npm install, npm run build, npm start (porta 4173).
 O banco e o leitor das fontes precisam ser configurados antes de enviar
 entradas reais. Nenhuma aposta e executada automaticamente.
+Envio com o site fechado: consulte AUTOMATION.md para ativar o agendador gratuito.
 
 As instrucoes abaixo documentam a versao anterior, mantida em server.mjs.
 Kalshi/API-Sports nao sao mais a fonte ativa da interface copiada.

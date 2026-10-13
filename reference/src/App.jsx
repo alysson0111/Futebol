@@ -9,7 +9,7 @@ import { mergeReportSignals, selectPendingSignalIds } from "./analysis/reportSig
 import { useLiveGames } from "./hooks/useLiveGames.js";
 import { usePrematchGames } from "./hooks/usePrematchGames.js";
 import { useGameAnalysis } from "./hooks/useGameAnalysis.js";
-import { deleteSignal, listSignals, saveSignal, updateSignalResult } from "./firebase/firebase.js";
+import { deleteSignal, listSignals, saveSignal, updateSignalResult, loadAutomationSettings, saveAutomationSettings } from "./firebase/firebase.js";
 import { setApiAccessToken } from './api/serverApi.js';
 import { analisarMercado } from './analysis/index.js';
 import { TELEGRAM_MARKETS, loadTelegramMarkets, persistTelegramMarkets, isTelegramMarketSelected } from './analysis/telegramMarkets.js';
@@ -177,11 +177,17 @@ export default function App() {
   const [liveInterval, setLiveInterval] = useState(300000);
   const [accessToken, setAccessToken] = useState('');
   const [autoSave, setAutoSave] = useState(false);
+  const [automationReady, setAutomationReady] = useState(false);
+  const [automationStatus, setAutomationStatus] = useState('');
+  const automationSavedRef = useRef('');
+  const automationWritingRef = useRef(false);
+  const automationLatestRef = useRef(null);
   const [telegramMarkets, setTelegramMarkets] = useState(() => {
     try { return loadTelegramMarkets(window.localStorage); } catch { return []; }
   });
   const telegramMarketsRef = useRef(telegramMarkets);
   telegramMarketsRef.current = telegramMarkets;
+  automationLatestRef.current = {enabled:autoSave,markets:telegramMarkets,token:accessToken,ready:automationReady};
   const [reportRefresh, setReportRefresh] = useState(0);
   const [filters, setFilters] = useState({ league: "all", market: "all", minConfidence: 0, minOdd: 0, search: "", mostrarApenasAprovados: false });
   const [signals, setSignals] = useState([]);
@@ -203,6 +209,48 @@ export default function App() {
   useEffect(() => {
     try { persistTelegramMarkets(window.localStorage, telegramMarkets); } catch { /* Storage may be disabled. */ }
   }, [telegramMarkets]);
+
+  useEffect(() => {
+    let stopped = false;
+    setAutomationReady(false);
+    if (!accessToken) {setAutomationStatus('');return;}
+    setAutomationStatus('Consultando automacao...');
+    loadAutomationSettings().then(settings=>{
+      if(stopped)return;
+      const markets=settings.configured?settings.markets:telegramMarketsRef.current;
+      const enabled=settings.configured&&settings.enabled;
+      automationSavedRef.current=JSON.stringify({enabled,markets});
+      setAutoSave(enabled);
+      setTelegramMarkets(markets);
+      setAutomationReady(true);
+      setAutomationStatus(settings.configured?'Configuracao sincronizada.':'Automacao desativada.');
+    }).catch(error=>{if(!stopped)setAutomationStatus(`Falha na configuracao: ${error.message}`);});
+    return ()=>{stopped=true;};
+  },[accessToken]);
+
+  useEffect(() => {
+    if(!automationReady||!accessToken)return;
+    async function flushSettings() {
+      if(automationWritingRef.current)return;
+      automationWritingRef.current=true;
+      try {
+        while(true) {
+          const current=automationLatestRef.current;
+          if(!current.ready||current.token!==accessToken)break;
+          const settings={enabled:current.enabled,markets:current.markets};
+          const serialized=JSON.stringify(settings);
+          if(serialized===automationSavedRef.current)break;
+          setAutomationStatus('Salvando configuracao...');
+          await saveAutomationSettings(settings);
+          automationSavedRef.current=serialized;
+          setAutomationStatus('Configuracao salva no servidor.');
+        }
+      } catch(error) {setAutomationStatus(`Falha ao salvar configuracao: ${error.message}`);}
+      finally {automationWritingRef.current=false;}
+    }
+    const timer=window.setTimeout(flushSettings,500);
+    return ()=>window.clearTimeout(timer);
+  },[autoSave,telegramMarkets,automationReady,accessToken]);
 
   useEffect(() => {
     live.start().catch((error) => {
@@ -252,7 +300,7 @@ export default function App() {
   }, [accessToken, reportRefresh]);
 
   useEffect(() => {
-    if (!autoSave || !accessToken) return;
+    if (!autoSave || !accessToken || !automationReady) return;
     const entries = automaticGames.filter((game) => {
       const isSignal = game.analise?.entrada === true;
       return isSignal && !isFinishedGame(game) && game.key && !savedSignalKeysRef.current.has(game.key);
@@ -288,7 +336,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [automaticGames, autoSave, accessToken]);
+  }, [automaticGames, autoSave, accessToken, automationReady]);
 
   useEffect(() => {
     const gamesBySource = new Map();
@@ -420,7 +468,7 @@ export default function App() {
             <label htmlFor="accessToken">Token de envio</label>
             <input id="accessToken" type="password" autoComplete="off" value={accessToken} onChange={(event) => { setApiAccessToken(event.target.value); setAccessToken(event.target.value); }} />
           </div>
-          <label className="check-label"><input type="checkbox" checked={autoSave} disabled={!accessToken} onChange={(event) => setAutoSave(event.target.checked)} />Salvar entradas automaticamente</label>
+          <label className="check-label"><input type="checkbox" checked={autoSave} disabled={!automationReady} onChange={(event) => setAutoSave(event.target.checked)} />Salvar entradas automaticamente</label>
           <fieldset className="telegram-markets">
             <legend>Mercados no Telegram</legend>
             {TELEGRAM_MARKETS.map(([market, label]) => (
@@ -430,6 +478,7 @@ export default function App() {
               </label>
             ))}
           </fieldset>
+          {automationStatus && <span role="status">{automationStatus}</span>}
           <p>Confiabilidade: pontuação do scanner, não probabilidade de acerto.</p>
         </aside>
         {renderPage()}

@@ -1,0 +1,40 @@
+# Envio de sinais com o navegador fechado
+
+O agendador chama a rotina no servidor; nao precisa manter o site ou o computador ligado.
+O envio segue os mercados marcados, as estrategias existentes e a regra dos 43 minutos
+para Over 0.5 e ML. Sinais ja registrados nao sao reenviados.
+
+## Ativacao gratuita
+
+1. Publique esta versao no GitHub e na Vercel.
+2. O workflow autentica usando OIDC do GitHub, sem cadastrar secrets novos.
+   Apenas o workflow deste repositorio na branch main pode chamar a rotina.
+3. No sistema, informe o Token de envio, marque os mercados e ative
+   `Salvar entradas automaticamente`. Aguarde `Configuracao salva no servidor`.
+4. No GitHub, abra Actions > Sinais Telegram em segundo plano > Run workflow para testar.
+   Depois disso, o agendamento roda nominalmente a cada cinco minutos.
+
+Opcional: a variavel de repositorio `AUTOMATION_URL` muda o endereco da rotina.
+O padrao e `https://futebol-jet.vercel.app/api/automation/run`. Para outra audiencia,
+configure AUTOMATION_AUDIENCE igual no GitHub e na Vercel.
+
+## Limites e seguranca
+
+- GitHub Actions em repositorios publicos usa runners padrao gratuitos. Horarios agendados
+  podem atrasar, e workflows agendados podem ser desativados apos 60 dias sem atividade.
+- A Vercel Hobby permite cron nativo somente diario, por isso o agendador e externo.
+- O Firebase continua sujeito a cota gratuita. O servidor le no maximo 100 candidatos por
+  rodada, evita reenviar duplicados e revalida as preferencias antes de cada envio.
+- A coleta ainda depende do TotalCorner/Jina. Erros de acesso, cota do Firebase ou falha
+  no Telegram impedem o envio; o agendador nao resolve a indisponibilidade da fonte.
+- Alterar mercados ou desativar o envio exige `SCANNER_ACCESS_TOKEN`.
+  O agendador usa uma identidade temporaria que so autoriza a rotina de envio.
+  Um token fixo AUTOMATION_TOKEN e opcional para outro agendador autorizado.
+- Nenhuma aposta e realizada. Nenhum secret e incluido nos arquivos ou no navegador.
+- O historico de execucao e os resumos ficam em `central_jobs/telegram`;
+  as preferencias ficam em `central_config/telegram`.
+
+Referencias:
+https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule
+https://docs.github.com/en/billing/concepts/product-billing/github-actions
+https://vercel.com/docs/cron-jobs/usage-and-pricing

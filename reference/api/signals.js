@@ -320,20 +320,24 @@ async function listSignals(req, res) {
   send(res, 200, { ...payload, syncToken, pendingCursor: pending.nextCursor, limit: SIGNALS_READ_LIMIT });
 }
 
-async function saveSignal(req, res) {
-  const input = readBody(req);
-  if (input.sendTelegram !== undefined && typeof input.sendTelegram !== 'boolean') return send(res, 400, { error: 'Selecao de envio ao Telegram invalida.' });
-  if (isFinishedGame(input)) return send(res, 409, { error: 'Partida encerrada: nenhuma nova entrada pode ser enviada.' });
-  if (!isEntryTimingAllowed(input)) return send(res, 409, { error: 'Over +0.5 e ML: entradas somente ao vivo a partir dos 43 minutos, com minuto confirmado.' });
-  if (!(input.analise?.entrada === true || input.status === 'Entrada')) return send(res, 400, { error: 'Somente entradas aprovadas podem ser enviadas.' });
+export function prepareSignal(input) {
+  const reject = (status,message) => { throw Object.assign(new Error(message), {status}); };
+  if (input.sendTelegram !== undefined && typeof input.sendTelegram !== 'boolean') reject(400,'Selecao de envio ao Telegram invalida.');
+  if (isFinishedGame(input)) reject(409,'Partida encerrada: nenhuma nova entrada pode ser enviada.');
+  if (!isEntryTimingAllowed(input)) reject(409,'Over +0.5 e ML: entradas somente ao vivo a partir dos 43 minutos, com minuto confirmado.');
+  if (!(input.analise?.entrada === true || input.status === 'Entrada')) reject(400,'Somente entradas aprovadas podem ser enviadas.');
   const record = cleanSignal(input);
   record.telegramEnabled = input.sendTelegram !== false;
   if (!record.key || !record.home || !record.away || !record.market) {
-    return send(res, 400, { error: "Sinal incompleto." });
+    reject(400,"Sinal incompleto.");
   }
 
-  if (!Number.isFinite(record.confidence) || record.confidence <= 0 || record.confidence > 100 || !record.signalLines.length) return send(res, 400, { error: 'Entrada sem confiabilidade ou sinal valido.' });
-  const db = getDb();
+  if (!Number.isFinite(record.confidence) || record.confidence <= 0 || record.confidence > 100 || !record.signalLines.length) reject(400,'Entrada sem confiabilidade ou sinal valido.');
+  return record;
+}
+
+export async function persistApprovedSignal(db, input, deliver = deliverEntry) {
+  const record = prepareSignal(input);
   const doc = db.collection(SIGNAL_COLLECTION).doc(createHash('sha256').update(record.key).digest('hex'));
   const previous = await db.runTransaction(async transaction => {
     const snapshot = await transaction.get(doc);
@@ -341,11 +345,17 @@ async function saveSignal(req, res) {
     transaction.set(doc, { ...record, createdAt: now(), updatedAt: now() });
     return null;
   });
-  if (previous) return send(res, 200, { id: doc.id, ...previous, duplicate: true });
+  if (previous) return { id: doc.id, ...previous, duplicate: true };
 
-  const delivery = await deliverEntry(record, { enabled: record.telegramEnabled });
-  await doc.update({ telegram: delivery });
-  send(res, 200, { id: doc.id, ...record, telegram: delivery });
+  const delivery = await deliver(record, { enabled: record.telegramEnabled });
+  await doc.update({ telegram: delivery, updatedAt: now() });
+  return { id: doc.id, ...record, telegram: delivery };
+}
+
+async function saveSignal(req, res) {
+  const input = readBody(req);
+  prepareSignal(input);
+  send(res,200,await persistApprovedSignal(getDb(),input));
 }
 
 async function updateResult(req, res) {
@@ -393,6 +403,6 @@ export default async function handler(req, res) {
     if (req.method === "DELETE") return await deleteSignal(req, res);
     return send(res, 405, { error: "Metodo nao permitido." });
   } catch (error) {
-    send(res, 500, { error: error.message || "Erro no banco de sinais." });
+    send(res, error.status || 500, { error: error.message || "Erro no banco de sinais." });
   }
 }

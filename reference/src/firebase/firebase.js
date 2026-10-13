@@ -1,5 +1,10 @@
 import { apiJson } from "../api/serverApi.js";
 
+export function loadAutomationSettings() { return apiJson('/api/automation/settings'); }
+export function saveAutomationSettings(settings) {
+  return apiJson('/api/automation/settings',{method:'POST',body:JSON.stringify(settings)});
+}
+
 export function listSignals(cursor = 0, since = "", pendingIds = [], pendingCursor = '') {
   const query = new URLSearchParams({ cursor: String(cursor) });
   if (pendingCursor) query.set('pendingCursor', pendingCursor);
