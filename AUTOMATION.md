@@ -12,6 +12,21 @@ em `central_jobs/results`. Apenas placares finais confirmados e estatisticas suf
 para o mercado encerram sinais. Resultados manuais ou ja confirmados nao sao sobrescritos.
 Paginas adicionais da agenda por data tambem sao consultadas; falhas ficam no resumo.
 
+## Avisos de resultado no Telegram
+
+Ao encerrar um sinal cuja entrada foi enviada, a mesma transacao cria um aviso em
+`central_telegram_results`. Uma etapa independente chama `/api/automation/notify-results`
+e responde a mensagem original com Green, Red ou Reembolso, incluindo resultados parciais.
+O chat original e salvo para novas entradas. Entradas antigas usam TELEGRAM_CHAT_ID.
+Falhas explicitas e limites de envio sao tentados novamente; sucesso fica registrado no
+sinal em `telegramResult`. O resumo fica em `central_jobs/telegram-results`.
+Envios incertos (timeout, erro de servidor ou interrupcao depois de iniciar) nao sao
+reenviados automaticamente: e necessario conferir o chat antes de reenviar, pois o
+Telegram nao oferece uma chave de idempotencia para sendMessage.
+Resultados encerrados antes desta versao nao sao enviados em massa. Mercados desmarcados
+nao geram avisos se a entrada nao foi enviada. Desmarcar novas entradas nao impede o
+aviso das entradas ja enviadas.
+
 ## Ativacao gratuita
 
 1. Publique esta versao no GitHub e na Vercel.

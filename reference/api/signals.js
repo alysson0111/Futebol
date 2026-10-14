@@ -4,6 +4,7 @@ import { fetchTotalCornerResultsDate, totalCornerRowsToFixtures } from "./_lib/t
 import { isFinishedGame, buildFinalSignalUpdate } from "../src/analysis/signalSettlement.js";
 import { selectResultDates, findResultGame } from "./_lib/signalResultLookup.js";
 import { deliverEntry } from './_lib/telegram.js';
+import { enqueueResult } from './_lib/resultNotifications.js';
 import { createHash } from 'node:crypto';
 import { isEntryTimingAllowed, isScoreTied } from '../src/analysis/entryTiming.js';
 
@@ -229,10 +230,14 @@ export async function settleSignalsFromTotalCorner(db, signals, cursor = 0, opti
   const updates = new Map();
   let games = [];
   const plan = selectResultDates(pending, cursor);
-  const settlementStatus = { updated: 0, errors: [], checkedDates: plan.dates, nextCursor: plan.nextCursor };
+  const settlementStatus = { updated: 0, errors: [], warnings: [], sources: [], checkedDates: plan.dates, nextCursor: plan.nextCursor };
   try {
     const rowResults = await Promise.allSettled(plan.dates.map((dateIso) => options.fetchGames ? options.fetchGames(dateIso) : fetchTotalCornerResultsDate(dateIso)));
     rowResults.forEach((result, index) => {
+      if(result.status==='fulfilled'){
+        settlementStatus.warnings.push(...(result.value.coverageWarnings||[]).map(warning=>`${plan.dates[index]}: ${warning}`));
+        settlementStatus.sources.push(...(result.value.resultSources||[]).map(source=>({date:plan.dates[index],source})));
+      }
       if (result.status === "rejected") settlementStatus.errors.push(`${plan.dates[index]}: ${result.reason?.message || "Falha ao buscar resultado"}`);
       else if (!result.value.length) settlementStatus.errors.push(`${plan.dates[index]}: fonte sem jogos legiveis`);
       else (result.value.coverageErrors || []).forEach(error => settlementStatus.errors.push(`${plan.dates[index]}: ${error}`));
@@ -259,8 +264,8 @@ export async function settleSignalsFromTotalCorner(db, signals, cursor = 0, opti
     updates.set(signal.id, settlement);
   }
   const entries = [...updates.entries()];
-  for (let index = 0; index < entries.length; index += 450) {
-    const group=entries.slice(index,index+450);
+  for (let index = 0; index < entries.length; index += 100) {
+    const group=entries.slice(index,index+100);
     const committed=await db.runTransaction(async transaction=>{
       const refs=group.map(([id])=>db.collection(SIGNAL_COLLECTION).doc(id));
       const snapshots=await transaction.getAll(...refs);
@@ -269,6 +274,7 @@ export async function settleSignalsFromTotalCorner(db, signals, cursor = 0, opti
         const current=snapshot.exists?snapshot.data():null;
         if(!current||current.finalConfirmed||current.result!=='pendente')return;
         transaction.update(refs[position],group[position][1]);
+        enqueueResult(transaction,db,group[position][0],current,group[position][1]);
         applied.push(group[position][0]);
       });
       return applied;
@@ -394,7 +400,12 @@ async function updateResult(req, res) {
     settledAtText: result === "pendente" ? "" : new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }),
     updatedAt: now()
   };
-  await doc.update(update);
+  await db.runTransaction(async transaction=>{
+    const current=await transaction.get(doc);
+    if(!current.exists)throw Object.assign(new Error('Sinal nao encontrado.'),{status:404});
+    transaction.update(doc,update);
+    enqueueResult(transaction,db,String(id),current.data(),update);
+  });
 
   send(res, 200, { ok: true, ...update });
 }

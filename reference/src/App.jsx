@@ -5,7 +5,7 @@ import Prematch from "./pages/Prematch.jsx";
 import GameDetails from "./pages/GameDetails.jsx";
 import { getTodayInput } from "./analysis/scoreUtils.js";
 import { buildFinalSignalUpdate, isFinishedGame } from "./analysis/signalSettlement.js";
-import { mergeReportSignals, selectPendingSignalIds } from "./analysis/reportSignals.js";
+import { mergeReportSignals, selectPendingSignalIds, reportSettlementStatus } from "./analysis/reportSignals.js";
 import { useLiveGames } from "./hooks/useLiveGames.js";
 import { usePrematchGames } from "./hooks/usePrematchGames.js";
 import { useGameAnalysis } from "./hooks/useGameAnalysis.js";
@@ -281,13 +281,7 @@ export default function App() {
         const saved = payload.signals || [];
         saved.forEach((signal) => { if (signal.key) savedSignalKeysRef.current.add(signal.key); });
         setSignals((current) => mergeReportSignals(current, saved, deletedSignalIdsRef.current));
-        if (payload.settlement?.errors?.length) {
-          setBankStatus(`Resultados: falha na fonte. ${payload.settlement.errors[0]}`);
-        } else if (payload.settlement?.updated) {
-          setBankStatus(`${payload.settlement.updated} resultado(s) final(is) atualizado(s).`);
-        } else {
-          setBankStatus(`Banco consultado: ${payload.settlement?.pendingChecked || 0} pendente(s) revisado(s), aguardando resultado final confirmado.`);
-        }
+        setBankStatus(reportSettlementStatus(payload.settlement));
       } catch (error) {
         if (/quota|RESOURCE_EXHAUSTED/i.test(error.message)) retryDelay = 300000;
         if (!stopped) setBankStatus(`Erro ao consultar resultados: ${error.message}`);

@@ -6,6 +6,7 @@ import { isFinishedGame } from '../../src/analysis/signalSettlement.js';
 import { persistApprovedSignal, readPendingSignals, settleSignalsFromTotalCorner } from '../signals.js';
 import { fetchTotalCornerToday, totalCornerRowsToFixtures } from './totalCorner.js';
 import { analyzeFixtures, publicGame } from './scanner.js';
+import {processResultNotifications} from './resultNotifications.js';
 
 const settingsDoc = db => db.collection('central_config').doc('telegram');
 const jobDoc = (db,name='telegram') => db.collection('central_jobs').doc(name);
@@ -60,6 +61,20 @@ export async function runResultAutomation(db,options={}) {
     summary.error=error.message||'Falha ao confirmar resultados.';
     throw error;
   } finally {await finishRun(db,lease,summary,{pendingCursor,dateCursor});}
+}
+
+export async function runNotificationAutomation(db,options={}) {
+  const lease=await claimAutomationRun(db,Date.now(),'telegram-results');
+  if(!lease)return {status:'busy',sent:0};
+  let summary={status:'failed',sent:0};
+  let notificationCursor=lease.pendingCursor;
+  try {
+    const result=await processResultNotifications(db,{...options,cursor:notificationCursor});
+    notificationCursor=result.nextCursor;
+    summary={...result,status:result.failed||result.uncertain?'partial':'complete'};
+    return summary;
+  } catch(error){summary.error=error.message;throw error;}
+  finally {await finishRun(db,lease,summary,{pendingCursor:notificationCursor});}
 }
 
 export function selectAutomationEntries(games, markets, cursor=0) {

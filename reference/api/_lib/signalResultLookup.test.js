@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { selectResultDates, findResultGame } from "./signalResultLookup.js";
-import { mergeReportSignals } from "../../src/analysis/reportSignals.js";
+import { mergeReportSignals, reportSettlementStatus } from "../../src/analysis/reportSignals.js";
 import { parseTotalCornerMarkdown, totalCornerRowsToFixtures, fetchTotalCornerDate, fetchTotalCornerResultsDate, resultPageLinks } from "./totalCorner.js";
 
 test('pagination accepts relative links but never another date or origin',()=>{
@@ -58,10 +58,42 @@ test('ended page with another date is rejected without inferring FT from the URL
       : `# Agenda\n${date}\nLiga\n08:00 60 A 0 - 0 B` });
     const rows = await fetchTotalCornerResultsDate(date);
     assert.equal(rows.length, 1);
-    assert.match(rows.coverageErrors[0], /nao confirmou a data/);
+    assert.deepEqual(rows.coverageErrors, []);
+    assert.match(rows.coverageWarnings[0], /nao confirmou a data/);
+    assert.deepEqual(rows.resultSources,['Agenda por data']);
     const game = analyzeFixtures({ response: totalCornerRowsToFixtures(rows) })[0];
     assert.equal(buildFinalSignalUpdate({ market: 'over05' }, game), null);
   } finally { globalThis.fetch = original; }
+});
+
+test('undated optional ended page cannot settle games but a dated schedule can',async()=>{
+  const original=globalThis.fetch,date=todayIso();
+  try {
+    globalThis.fetch=async url=>({ok:true,text:async()=>String(url).includes('/ended')
+      ? '# Jogos encerrados\nLiga\n08:00 FT A 4 - 0 B'
+      : `# Agenda\n## Data: ${date}\nLiga\n08:00 FT A 0 - 0 B`});
+    const rows=await fetchTotalCornerResultsDate(date);
+    assert.equal(rows.length,1);
+    assert.equal(rows[0].homeGoals,0);
+    assert.equal(rows.coverageWarnings.length,1);
+    assert.equal(rows.coverageErrors.length,0);
+    const game=analyzeFixtures({response:totalCornerRowsToFixtures(rows)}).find(game=>game.market==='over05');
+    assert.equal(buildFinalSignalUpdate({market:'over05'},game).result,'red');
+  }finally{globalThis.fetch=original;}
+});
+
+test('both sources without the requested date remain a real error',async()=>{
+  const original=globalThis.fetch;
+  try {
+    globalThis.fetch=async()=>({ok:true,text:async()=> '# Agenda\n2000-01-01\nLiga\n08:00 FT A 4 - 0 B'});
+    await assert.rejects(fetchTotalCornerResultsDate(todayIso()),/nao confirmou a data/);
+  }finally{globalThis.fetch=original;}
+});
+
+test('report distinguishes a dated fallback from incomplete coverage and retains update counts',()=>{
+  assert.match(reportSettlementStatus({updated:2,warnings:['wrong optional date'],sources:[{source:'Agenda por data'}]}),/agenda por data.*2 resultado/);
+  assert.doesNotMatch(reportSettlementStatus({warnings:['wrong optional date']}),/falha na fonte/);
+  assert.match(reportSettlementStatus({updated:2,errors:['Agenda por data: 401']}),/consulta incompleta.*2 resultado.*401/);
 });
 
 test('historical settlement never consults the relative ended page', async () => {

@@ -43,7 +43,7 @@ test('results source failure releases its lease without advancing the cursor',as
 
 test('confirmed recovery preserves results changed concurrently and commits only pending signals',async()=>{
   const db=fakeDb();
-  const pending={...game(),id:'pending',result:'pendente'};
+  const pending={...game(),id:'pending',result:'pendente',telegram:{status:'enviado',messageId:123}};
   const manual={...pending,id:'manual'};
   db.records.set('central_sinais/pending',pending);
   db.records.set('central_sinais/manual',{...manual,result:'red',finalConfirmed:true});
@@ -52,6 +52,8 @@ test('confirmed recovery preserves results changed concurrently and commits only
   assert.equal(result.settlement.updated,1);
   assert.equal(db.records.get('central_sinais/pending').result,'green');
   assert.equal(db.records.get('central_sinais/manual').result,'red');
+  assert.equal(db.records.get('central_telegram_results/pending').status,'pendente');
+  assert.equal(db.records.has('central_telegram_results/manual'),false);
 });
 
 test('settings default disabled and validate every selected market',async()=>{

@@ -390,7 +390,7 @@ async function fetchTotalCornerPage(url, expectedDate, sourceUrl = url, deadline
 
   if (!response.ok) throw new Error(`TotalCorner retornou ${response.status}.`);
   const markdown = await response.text();
-  const pageDates = markdown.split("\n").map(cleanLine).map((line) => line.match(/^(\d{4}-\d{2}-\d{2})(?:\s|$)/)?.[1]).filter(Boolean);
+  const pageDates = markdown.split("\n").map(cleanLine).map((line) => line.match(/^(?:#{1,6}\s*)?(?:(?:Data|Date)\s*:\s*)?(\d{4}-\d{2}-\d{2})(?:\s|$)/i)?.[1]).filter(Boolean);
   if (expectedDate && !pageDates.includes(expectedDate)) {
     throw new Error(`TotalCorner nao confirmou a data ${expectedDate} na pagina de resultados.`);
   }
@@ -438,15 +438,25 @@ export async function fetchTotalCornerResultsDate(dateIso) {
   ]);
   const rows = [];
   const errors = [];
+  const warnings = [];
+  const sources = [];
+  const scheduleConfirmed=results[1].status==='fulfilled'&&results[1].value.length>0;
   results.forEach((result, index) => {
     const label = index === 0 ? 'Jogos encerrados' : 'Agenda por data';
-    if (result.status === 'rejected') errors.push(`${label}: ${result.reason?.message || 'Falha na consulta.'}`);
+    if (result.status === 'rejected') {
+      const message=`${label}: ${result.reason?.message || 'Falha na consulta.'}`;
+      if(index===0&&scheduleConfirmed)warnings.push(message);
+      else errors.push(message);
+    }
     else {
       rows.push(...result.value);
+      if(result.value.length)sources.push(label);
       errors.push(...result.value.coverageErrors.map(error => `${label}: ${error}`));
     }
   });
   if (results.every(result => result.status === 'rejected')) throw new Error(errors.join(' | '));
   rows.coverageErrors = errors;
+  rows.coverageWarnings = warnings;
+  rows.resultSources = sources;
   return rows;
 }

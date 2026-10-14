@@ -23,12 +23,12 @@ export default async function handler(req, res) {
   const url = new URL(req.url, 'http://localhost');
   res.setHeader('Cache-Control', 'no-store');
   if (url.pathname.startsWith('/api/')) {
-    const routes = { '/api/games': games, '/api/forebet-analysis': analysis, '/api/signals': signals, '/api/automation/settings':automation, '/api/automation/run':automation, '/api/automation/results':automation };
+    const routes = { '/api/games': games, '/api/forebet-analysis': analysis, '/api/signals': signals, '/api/automation/settings':automation, '/api/automation/run':automation, '/api/automation/results':automation, '/api/automation/notify-results':automation };
     if (!routes[url.pathname]) return send(res, 404, { error: 'Rota nao encontrada.' });
     // Report reads also settle results in the reference, so protect every bank operation.
     if (url.pathname === '/api/signals' && !authorized(req)) return send(res, 401, { error: 'Informe o token de envio configurado em SCANNER_ACCESS_TOKEN.' });
     if (url.pathname === '/api/automation/settings' && !authorized(req)) return send(res,401,{error:'Informe o token de envio para configurar a automacao.'});
-    if (['/api/automation/run','/api/automation/results'].includes(url.pathname) && !authorized(req,'AUTOMATION_TOKEN') && !await authorizedScheduler(req)) return send(res,401,{error:'Agendador nao autorizado.'});
+    if (['/api/automation/run','/api/automation/results','/api/automation/notify-results'].includes(url.pathname) && !authorized(req,'AUTOMATION_TOKEN') && !await authorizedScheduler(req)) return send(res,401,{error:'Agendador nao autorizado.'});
     try {
       if (['POST', 'PATCH', 'DELETE'].includes(req.method) && req.body == null) {
         let body = '';
