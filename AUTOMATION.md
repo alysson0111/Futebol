@@ -16,13 +16,15 @@ Paginas adicionais da agenda por data tambem sao consultadas; falhas ficam no re
 
 Ao encerrar um sinal cuja entrada foi enviada, a mesma transacao cria um aviso em
 `central_telegram_results`. Uma etapa independente chama `/api/automation/notify-results`
-e responde a mensagem original com Green, Red ou Reembolso, incluindo resultados parciais.
+e edita a mensagem original com Green, Red ou Reembolso, incluindo resultados parciais,
+sem resposta separada. O texto original da entrada e preservado.
 O chat original e salvo para novas entradas. Entradas antigas usam TELEGRAM_CHAT_ID.
 Falhas explicitas e limites de envio sao tentados novamente; sucesso fica registrado no
 sinal em `telegramResult`. O resumo fica em `central_jobs/telegram-results`.
-Envios incertos (timeout, erro de servidor ou interrupcao depois de iniciar) nao sao
-reenviados automaticamente: e necessario conferir o chat antes de reenviar, pois o
-Telegram nao oferece uma chave de idempotencia para sendMessage.
+Timeouts e erros de servidor durante a edicao podem ser tentados novamente no mesmo
+message_id, sem criar novas mensagens. "Message is not modified" confirma que o texto
+ja esta atualizado. Mensagem excluida ou sem permissao nao gera uma mensagem alternativa.
+Itens antigos marcados como incertos ou interrompidos durante um envio exigem conferencia.
 Resultados encerrados antes desta versao nao sao enviados em massa. Mercados desmarcados
 nao geram avisos se a entrada nao foi enviada. Desmarcar novas entradas nao impede o
 aviso das entradas ja enviadas.

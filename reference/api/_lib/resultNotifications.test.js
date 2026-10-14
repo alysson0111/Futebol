@@ -37,26 +37,42 @@ test('result text distinguishes full and partial wins, losses and refunds',()=>{
   assert.match(resultMessage(signal({market:'corners',liveCorners:11})),/Escanteios: 11/);
 });
 
-test('result delivery replies to the original message in the original chat',async()=>{
+test('result delivery edits the original message without replying or creating another message',async()=>{
   const fetchBefore=globalThis.fetch,tokenBefore=process.env.TELEGRAM_BOT_TOKEN;
   process.env.TELEGRAM_BOT_TOKEN='test-only';
   try {
-    globalThis.fetch=async(_url,options)=>{
+    globalThis.fetch=async(url,options)=>{
+      assert.ok(url.endsWith('/editMessageText'));
       const body=JSON.parse(options.body);
       assert.equal(body.chat_id,'-100456');
-      assert.deepEqual(body.reply_parameters,{message_id:123,allow_sending_without_reply:false});
+      assert.equal(body.message_id,123);
+      assert.equal(body.reply_parameters,undefined);
       assert.match(body.text,/Placar final: 2x1/);
-      return {ok:true,status:200,json:async()=>({ok:true,result:{message_id:456}})};
+      return {ok:true,status:200,json:async()=>({ok:true,result:{message_id:123}})};
     };
-    assert.equal((await deliverResult(signal())).messageId,456);
+    assert.equal((await deliverResult(signal())).messageId,123);
     assert.equal((await deliverResult(signal({finalConfirmed:false}))).status,'ignorado');
     assert.equal((await deliverResult(signal({telegram:{status:'falhou'}}))).status,'ignorado');
     globalThis.fetch=async()=>({ok:false,status:429,json:async()=>({ok:false,error_code:429,parameters:{retry_after:120}})});
     assert.equal((await deliverResult(signal())).retryAfter,120);
     globalThis.fetch=async()=>{throw new Error('timeout with test-only secret');};
     const uncertain=await deliverResult(signal());
-    assert.equal(uncertain.status,'incerto');assert.doesNotMatch(JSON.stringify(uncertain),/test-only/);
+    assert.equal(uncertain.status,'pendente');assert.doesNotMatch(JSON.stringify(uncertain),/test-only/);
+    globalThis.fetch=async()=>({ok:false,status:400,json:async()=>({ok:false,error_code:400,description:'Bad Request: message is not modified'})});
+    assert.equal((await deliverResult(signal())).status,'enviado');
+    globalThis.fetch=async()=>({ok:false,status:400,json:async()=>({ok:false,error_code:400,description:'message to edit not found'})});
+    assert.equal((await deliverResult(signal())).status,'falhou');
   } finally {globalThis.fetch=fetchBefore;if(tokenBefore===undefined)delete process.env.TELEGRAM_BOT_TOKEN;else process.env.TELEGRAM_BOT_TOKEN=tokenBefore;}
+});
+
+test('editing preserves the entry text, confidence, entry score and minute',()=>{
+  const original='SINAL ORIGINAL\nConfiabilidade: 80%\nPlacar: 0x0 | Minuto: 43\nData: 14/10/2026';
+  const text=resultMessage(signal({telegram:{text:original}}));
+  assert.ok(text.startsWith(original+'\n\nRESULTADO: GREEN'));
+  assert.match(text,/Placar final: 2x1/);
+  const legacy=resultMessage(signal({confidence:80,entryScoreText:'0x0',entryLiveStatus:"43'"}));
+  assert.match(legacy,/Confiabilidade do scanner: 80%/);
+  assert.match(legacy,/Placar: 0x0 \| Minuto: 43'/);
 });
 
 test('enqueue only a newly confirmed result of an actually delivered entry',async()=>{

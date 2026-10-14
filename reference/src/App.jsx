@@ -13,6 +13,7 @@ import { deleteSignal, listSignals, saveSignal, updateSignalResult, loadAutomati
 import { setApiAccessToken } from './api/serverApi.js';
 import { analisarMercado } from './analysis/index.js';
 import { TELEGRAM_MARKETS, loadTelegramMarkets, persistTelegramMarkets, isTelegramMarketSelected } from './analysis/telegramMarkets.js';
+import {loadSavedAccessToken,persistAccessToken} from './analysis/savedAccessToken.js';
 
 const styles = `
   :root {
@@ -77,6 +78,7 @@ const styles = `
   .check-field { align-content: end; }
   .check-label { min-height: 40px; border: 1px solid var(--line); border-radius: 8px; background: #fff; display: flex; align-items: center; gap: 8px; padding: 0 10px; color: var(--ink); font-size: 13px; font-weight: 700; }
   .check-label input { width: 16px; min-height: 16px; padding: 0; }
+  .field .check-label { color: var(--ink); font-size: 13px; text-transform: none; }
   .telegram-markets { margin: 0; padding: 12px 0 0; border: 0; border-top: 1px solid rgba(255,255,255,.18); min-width: 0; display: grid; gap: 8px; }
   .telegram-markets legend { padding: 0 0 8px; color: #f7fff9; font-size: 13px; font-weight: 700; }
   .telegram-market { display: flex; gap: 10px; align-items: center; min-height: 30px; font-size: 13px; cursor: pointer; }
@@ -175,7 +177,12 @@ export default function App() {
   const [dateStart, setDateStart] = useState(today);
   const [dateEnd, setDateEnd] = useState(today);
   const [liveInterval, setLiveInterval] = useState(300000);
-  const [accessToken, setAccessToken] = useState('');
+  const [savedAccess] = useState(()=>{
+    try{return loadSavedAccessToken(window.localStorage);}catch{return {token:'',remember:false};}
+  });
+  const [accessToken, setAccessToken] = useState(savedAccess.token);
+  const [rememberAccessToken, setRememberAccessToken] = useState(savedAccess.remember);
+  const [tokenStorageError,setTokenStorageError] = useState('');
   const [autoSave, setAutoSave] = useState(false);
   const [automationReady, setAutomationReady] = useState(false);
   const [automationStatus, setAutomationStatus] = useState('');
@@ -209,6 +216,16 @@ export default function App() {
   useEffect(() => {
     try { persistTelegramMarkets(window.localStorage, telegramMarkets); } catch { /* Storage may be disabled. */ }
   }, [telegramMarkets]);
+
+  useEffect(()=>{
+    setApiAccessToken(accessToken);
+    try {
+      persistAccessToken(window.localStorage,accessToken,rememberAccessToken);
+      setTokenStorageError('');
+    }catch{
+      setTokenStorageError(rememberAccessToken?'O navegador nao permitiu salvar o token.':'Nao foi possivel remover o token salvo. Limpe os dados deste site no navegador.');
+    }
+  },[accessToken,rememberAccessToken]);
 
   useEffect(() => {
     let stopped = false;
@@ -461,6 +478,8 @@ export default function App() {
           <div className="field">
             <label htmlFor="accessToken">Token de envio</label>
             <input id="accessToken" type="password" autoComplete="off" value={accessToken} onChange={(event) => { setApiAccessToken(event.target.value); setAccessToken(event.target.value); }} />
+            <label className="check-label" title="Salva o token neste navegador. Nao use em dispositivo compartilhado."><input type="checkbox" checked={rememberAccessToken} onChange={event=>setRememberAccessToken(event.target.checked)} />Lembrar neste dispositivo</label>
+            {tokenStorageError&&<span role="status">{tokenStorageError}</span>}
           </div>
           <label className="check-label"><input type="checkbox" checked={autoSave} disabled={!automationReady} onChange={(event) => setAutoSave(event.target.checked)} />Salvar entradas automaticamente</label>
           <fieldset className="telegram-markets">
