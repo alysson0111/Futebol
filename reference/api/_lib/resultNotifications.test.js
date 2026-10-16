@@ -29,11 +29,13 @@ const readPage=db=>async()=>{
 };
 
 test('result text distinguishes full and partial wins, losses and refunds',()=>{
-  assert.match(resultMessage(signal()),/RESULTADO: GREEN/);
-  assert.match(resultMessage(signal({result:'red'})),/RESULTADO: RED/);
-  assert.match(resultMessage(signal({result:'push'})),/RESULTADO: REEMBOLSO/);
+  assert.match(resultMessage(signal()),/RESULTADO: \u{1F7E2} GREEN/u);
+  assert.match(resultMessage(signal({result:'red'})),/RESULTADO: \u{1F534} RED/u);
+  assert.match(resultMessage(signal({result:'push'})),/RESULTADO: \u{1F7E1} REEMBOLSO/u);
   assert.match(resultMessage(signal({settlementFactor:0.5})),/GREEN PARCIAL/);
   assert.match(resultMessage(signal({result:'red',settlementFactor:0.5})),/RED PARCIAL/);
+  assert.match(resultMessage(signal({settlementFactor:0.5})),/\u{1F7E2} GREEN PARCIAL/u);
+  assert.match(resultMessage(signal({result:'red',settlementFactor:0.5})),/\u{1F534} RED PARCIAL/u);
   assert.match(resultMessage(signal({market:'corners',liveCorners:11})),/Escanteios: 11/);
 });
 
@@ -68,7 +70,7 @@ test('result delivery edits the original message without replying or creating an
 test('editing preserves the entry text, confidence, entry score and minute',()=>{
   const original='SINAL ORIGINAL\nConfiabilidade: 80%\nPlacar: 0x0 | Minuto: 43\nData: 14/10/2026';
   const text=resultMessage(signal({telegram:{text:original}}));
-  assert.ok(text.startsWith(original+'\n\nRESULTADO: GREEN'));
+  assert.ok(text.startsWith(original+'\n\nRESULTADO: \u{1F7E2} GREEN'));
   assert.match(text,/Placar final: 2x1/);
   const legacy=resultMessage(signal({confidence:80,entryScoreText:'0x0',entryLiveStatus:"43'"}));
   assert.match(legacy,/Confiabilidade do scanner: 80%/);

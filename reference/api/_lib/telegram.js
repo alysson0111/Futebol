@@ -30,7 +30,8 @@ export async function deliverEntry(record, { enabled = true } = {}) {
 export function resultMessage(record) {
   const partial=Number(record.settlementFactor)===0.5;
   const label=record.result==='push'?'REEMBOLSO':record.result==='green'?(partial?'GREEN PARCIAL (metade ganha, metade devolvida)':'GREEN'):(partial?'RED PARCIAL (metade perdida, metade devolvida)':'RED');
-  return [record.telegram?.text || entryMessage(record),'',`RESULTADO: ${label}`,`Placar final: ${record.finalScoreText}`,
+  const indicator=record.result==='push'?'\u{1F7E1}':record.result==='green'?'\u{1F7E2}':'\u{1F534}';
+  return [record.telegram?.text || entryMessage(record),'',`RESULTADO: ${indicator} ${label}`,`Placar final: ${record.finalScoreText}`,
     ...(record.market==='corners'?[`Escanteios: ${record.liveCorners}`]:[]),
     `Confirmado: ${record.settledAtText || '-'}`].join('\n');
 }
