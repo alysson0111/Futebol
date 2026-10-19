@@ -1,8 +1,9 @@
 # Envio de sinais com o navegador fechado
 
 O agendador chama a rotina no servidor; nao precisa manter o site ou o computador ligado.
-O envio segue os mercados marcados, as estrategias existentes e a regra dos 43 minutos
-para Over 0.5 e ML. Sinais ja registrados nao sao reenviados.
+O envio segue os mercados marcados e as estrategias existentes. Over 0.5 somente a
+partir de 65 minutos (mantendo 0x0 e o limite atual de 70 minutos); ML continua a partir
+de 43 minutos com placar empatado. Sinais ja registrados nao sao reenviados.
 
 ## Resultados em segundo plano
 

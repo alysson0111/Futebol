@@ -1,4 +1,6 @@
 export const MIN_ENTRY_MINUTE = 43;
+export const MIN_OVER05_ENTRY_MINUTE = 65;
+export const minEntryMinute = market => market === 'over05' ? MIN_OVER05_ENTRY_MINUTE : MIN_ENTRY_MINUTE;
 const TIMED_MARKETS = new Set(['over05', 'ml']);
 
 export function entryMinute(game) {
@@ -16,7 +18,7 @@ export function isEntryTimingAllowed(game) {
   if (!TIMED_MARKETS.has(game.market)) return true;
   const statuses = [game.apiStatus, game.fixture?.status?.short, game.liveStatus].map(value => String(value || '').trim().toUpperCase());
   if (statuses.some(status => ['NS', 'PRE-JOGO', 'FT', 'AET', 'PEN', 'FIM', 'FULL', 'INTEGRAL', 'CANC', 'PST', 'SUSP', 'ABD'].includes(status))) return false;
-  return entryMinute(game) !== null && entryMinute(game) >= MIN_ENTRY_MINUTE;
+  return entryMinute(game) !== null && entryMinute(game) >= minEntryMinute(game.market);
 }
 
 export function isScoreTied(game) {
@@ -46,7 +48,7 @@ export function enforceEntryTiming(game) {
     signals: [],
     stats: [
       ...(game.stats || []),
-      ...(!isEntryTimingAllowed(game) ? [`NAO | Entrada a partir de ${MIN_ENTRY_MINUTE} minutos | ${minute === null ? 'Minuto indisponivel' : `${minute}'`}`] : []),
+      ...(!isEntryTimingAllowed(game) ? [`NAO | Entrada a partir de ${minEntryMinute(game.market)} minutos | ${minute === null ? 'Minuto indisponivel' : `${minute}'`}`] : []),
       ...(game.market === 'ml' && !isScoreTied(game) ? [`NAO | Placar empatado para ML | ${game.scoreText || 'Placar indisponivel'}`] : [])
     ]
   };

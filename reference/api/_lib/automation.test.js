@@ -18,7 +18,7 @@ function fakeDb(settings={enabled:true,markets:['over05','ml']}) {
   };
   return db;
 }
-const game = (market='over05',minute=43,key=`a-${market}`)=>({key,market,marketLabel:market,sourceId:'a',home:'Casa',away:'Fora',league:'Liga',dateText:'13/10/2026',status:'Entrada',confidence:80,liveStatus:`${minute}'`,apiStatus:'LIVE',scoreText:'0x0',signals:market==='ml'?['ML Casa (Casa)']:['Over 0.5 gols'],mlPick:'home'});
+const game = (market='over05',minute=market==='over05'?65:43,key=`a-${market}`)=>({key,market,marketLabel:market,sourceId:'a',home:'Casa',away:'Fora',league:'Liga',dateText:'13/10/2026',status:'Entrada',confidence:80,liveStatus:`${minute}'`,apiStatus:'LIVE',scoreText:'0x0',signals:market==='ml'?['ML Casa (Casa)']:['Over 0.5 gols'],mlPick:'home'});
 const response=()=>({setHeader(){},end(body){this.body=JSON.parse(body);}});
 
 test('results run independently of Telegram preferences and rotate pending pages',async()=>{
@@ -110,6 +110,11 @@ test('disabled automation does not read a source or send a message',async()=>{
   assert.equal(db.records.has('central_jobs/telegram'),false);
 });
 
+test('background delivery blocks cached Over 0.5 entries at 64 and keeps ML at 43',()=>{
+  const entries=selectAutomationEntries([game('over05',64,'early'),game('over05',65,'ready'),game('ml',43,'ml-ready')],['over05','ml']);
+  assert.deepEqual(entries.map(entry=>entry.key),['ready','ml-ready']);
+});
+
 test('background ML selects only ties, never already-approved non-tied or unknown scores',()=>{
   const entries=selectAutomationEntries([
     {...game('ml',60,'tied'),scoreText:'2x2'},
@@ -121,7 +126,7 @@ test('background ML selects only ties, never already-approved non-tied or unknow
 });
 
 test('hundred-signal pages rotate so large lists do not permanently hide later candidates',()=>{
-  const games=Array.from({length:230},(_,index)=>game('over05',43,`game-${index}`));
+  const games=Array.from({length:230},(_,index)=>game('over05',65,`game-${index}`));
   let cursor=0;
   const seen=new Set();
   for(let run=0;run<3;run++) {
