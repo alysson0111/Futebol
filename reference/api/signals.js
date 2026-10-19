@@ -229,10 +229,10 @@ export async function settleSignalsFromTotalCorner(db, signals, cursor = 0, opti
 
   const updates = new Map();
   let games = [];
-  const plan = selectResultDates(pending, cursor);
+  const plan = options.dates ? {dates:[...new Set(options.dates)].filter(date=>/^\d{4}-\d{2}-\d{2}$/.test(date)&&pending.some(signal=>signal.dateText===date.split('-').reverse().join('/'))),nextCursor:0} : selectResultDates(pending, cursor);
   const settlementStatus = { updated: 0, errors: [], warnings: [], sources: [], checkedDates: plan.dates, nextCursor: plan.nextCursor };
   try {
-    const rowResults = await Promise.allSettled(plan.dates.map((dateIso) => options.fetchGames ? options.fetchGames(dateIso) : fetchTotalCornerResultsDate(dateIso)));
+    const rowResults = await Promise.allSettled(plan.dates.map((dateIso) => options.fetchGames ? options.fetchGames(dateIso) : fetchTotalCornerResultsDate(dateIso,{store:db,deadline:options.deadline})));
     rowResults.forEach((result, index) => {
       if(result.status==='fulfilled'){
         settlementStatus.warnings.push(...(result.value.coverageWarnings||[]).map(warning=>`${plan.dates[index]}: ${warning}`));
@@ -282,7 +282,8 @@ export async function settleSignalsFromTotalCorner(db, signals, cursor = 0, opti
     group.filter(([id])=>!committed.includes(id)).forEach(([id])=>updates.delete(id));
   }
   settlementStatus.updated = updates.size;
-  settlementStatus.pendingChecked = pending.length;
+  settlementStatus.pendingChecked = pending.filter(signal=>plan.dates.includes(String(signal.dateText||'').split('/').reverse().join('-'))).length;
+  settlementStatus.pendingDeferred = pending.length-settlementStatus.pendingChecked;
   settlementStatus.unresolved = pending.length - updates.size;
   return { signals: signals.map((signal) => updates.has(signal.id) ? { ...signal, ...updates.get(signal.id) } : signal), settlement: settlementStatus };
 }

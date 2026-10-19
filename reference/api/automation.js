@@ -9,7 +9,7 @@ export default async function handler(req,res) {
       if(req.method==='POST')return send(res,200,await writeAutomationSettings(getDb(),req.body || {}));
     }
     if(path.endsWith('/run')&&req.method==='POST')return send(res,200,await runAutomation(getDb()));
-    if(path.endsWith('/results')&&req.method==='POST')return send(res,200,await runResultAutomation(getDb()));
+    if(path.endsWith('/results')&&req.method==='POST')return send(res,200,await runResultAutomation(getDb(),{maxPasses:6}));
     if(path.endsWith('/notify-results')&&req.method==='POST')return send(res,200,await runNotificationAutomation(getDb()));
     return send(res,405,{error:'Metodo nao permitido.'});
   } catch(error) {

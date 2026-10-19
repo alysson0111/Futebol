@@ -1,3 +1,4 @@
+import {createHash} from 'node:crypto';
 const TOTALCORNER_TODAY_URL = "https://www.totalcorner.com/pt/match/today";
 const TOTALCORNER_ENDED_URL = `${TOTALCORNER_TODAY_URL}/ended`;
 
@@ -27,6 +28,8 @@ function cleanLine(value) {
 
 function cleanTeam(value) {
   return cleanLine(value)
+    .replace(/^(?:1[\u00bao]T|2[\u00bao]T|HT|FT)\s+(?:['\u2019\d]\s*)*/i, "")
+    .replace(/^\d{1,3}(?:\+\d{1,2})?['\u2019]\s*/, "")
     .replace(/\d{1,3}(?:\+\d{1,2})?['\u2019]\s*$/, "")
     .replace(/^\[[^\]]+\]\s*/, "")
     .replace(/\[[^\]]+\]/g, "")
@@ -374,7 +377,13 @@ export function resultPageLinks(markdown, dateIso, sourceUrl = totalCornerDateUr
   return [...links].slice(0, 8);
 }
 
-async function fetchTotalCornerPage(url, expectedDate, sourceUrl = url, deadline = Date.now()+20000) {
+async function fetchTotalCornerPage(url, expectedDate, sourceUrl = url, deadline = Date.now()+20000, store) {
+  const cacheRef=store&&expectedDate?store.collection('central_result_pages').doc(createHash('sha256').update(`v2|${expectedDate}|${url}`).digest('hex')):null;
+  if(cacheRef){
+    const cached=await cacheRef.get();
+    const data=cached.exists?cached.data():null;
+    if(data?.dateIso===expectedDate&&data.url===url&&data.expiresAt>Date.now()&&Array.isArray(data.rows)&&Array.isArray(data.pages))return {rows:data.rows,pages:data.pages};
+  }
   const response = await fetch(readerUrl(url), {
     signal: AbortSignal.timeout(Math.max(1,Math.min(20000,deadline-Date.now()))),
     headers: {
@@ -394,20 +403,26 @@ async function fetchTotalCornerPage(url, expectedDate, sourceUrl = url, deadline
   if (expectedDate && !pageDates.includes(expectedDate)) {
     throw new Error(`TotalCorner nao confirmou a data ${expectedDate} na pagina de resultados.`);
   }
-  return { rows: parseTotalCornerMarkdown(markdown), pages: expectedDate ? resultPageLinks(markdown, expectedDate, sourceUrl) : [] };
+  const page={ rows: parseTotalCornerMarkdown(markdown), pages: expectedDate ? resultPageLinks(markdown, expectedDate, sourceUrl) : [] };
+  if(cacheRef&&page.rows.length){
+    const recentCutoff=new Date(`${getSaoPauloDateIso()}T12:00:00Z`);recentCutoff.setUTCDate(recentCutoff.getUTCDate()-1);
+    const ttl=expectedDate>=recentCutoff.toISOString().slice(0,10)?120000:21600000;
+    await cacheRef.set(JSON.parse(JSON.stringify({...page,url,dateIso:expectedDate,fetchedAt:Date.now(),expiresAt:Date.now()+ttl})));
+  }
+  return page;
 }
 
 export async function fetchTotalCornerToday() {
   return (await fetchTotalCornerPage(TOTALCORNER_TODAY_URL)).rows;
 }
 
-export async function fetchTotalCornerDate(dateIso) {
-  return fetchTotalCornerResultPages(totalCornerDateUrl(dateIso), dateIso);
+export async function fetchTotalCornerDate(dateIso, options={}) {
+  return fetchTotalCornerResultPages(totalCornerDateUrl(dateIso), dateIso,options);
 }
 
-async function fetchTotalCornerResultPages(sourceUrl, dateIso) {
-  const deadline=Date.now()+45000;
-  const first = await fetchTotalCornerPage(sourceUrl, dateIso, sourceUrl,deadline);
+async function fetchTotalCornerResultPages(sourceUrl, dateIso,options={}) {
+  const deadline=Math.min(Date.now()+45000,options.deadline||Infinity);
+  const first = await fetchTotalCornerPage(sourceUrl, dateIso, sourceUrl,deadline,options.store);
   const rows = [...first.rows];
   const errors = [];
   if(first.rows.length>=400&&!first.pages.length)errors.push('Agenda com 400 ou mais jogos sem links de paginacao: cobertura possivelmente incompleta.');
@@ -418,7 +433,7 @@ async function fetchTotalCornerResultPages(sourceUrl, dateIso) {
     const batch = pages.filter(url => !visited.has(url)).slice(0, Math.min(4, 9 - visited.size));
     if (!batch.length) break;
     batch.forEach(url => visited.add(url));
-    const responses = await Promise.allSettled(batch.map(url => fetchTotalCornerPage(url, dateIso, sourceUrl,deadline)));
+    const responses = await Promise.allSettled(batch.map(url => fetchTotalCornerPage(url, dateIso, sourceUrl,deadline,options.store)));
     const results = responses.filter(result => result.status === 'fulfilled').map(result => result.value);
     responses.filter(result => result.status === 'rejected').forEach(result => errors.push(result.reason?.message || 'Falha em pagina adicional de resultados.'));
     results.forEach(page => rows.push(...page.rows));
@@ -429,12 +444,12 @@ async function fetchTotalCornerResultPages(sourceUrl, dateIso) {
   return output;
 }
 
-export async function fetchTotalCornerResultsDate(dateIso) {
+export async function fetchTotalCornerResultsDate(dateIso,options={}) {
   // A relative "today" page is never used to settle historical signals.
-  if (dateIso !== getSaoPauloDateIso()) return fetchTotalCornerDate(dateIso);
+  if (dateIso !== getSaoPauloDateIso()) return fetchTotalCornerDate(dateIso,options);
   const results = await Promise.allSettled([
-    fetchTotalCornerResultPages(TOTALCORNER_ENDED_URL, dateIso),
-    fetchTotalCornerDate(dateIso)
+    fetchTotalCornerResultPages(TOTALCORNER_ENDED_URL, dateIso,options),
+    fetchTotalCornerDate(dateIso,options)
   ]);
   const rows = [];
   const errors = [];

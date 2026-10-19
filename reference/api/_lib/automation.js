@@ -32,7 +32,7 @@ export async function claimAutomationRun(db, time = Date.now(), name='telegram')
     const snapshot = await transaction.get(ref), data = snapshot.exists ? snapshot.data() : {};
     if (Number(data.leaseUntil || 0) > time || (data.lastStartedAtMs && time - data.lastStartedAtMs < 240000)) return false;
     transaction.set(ref,{owner,leaseUntil:time+90000,lastStartedAtMs:time,status:'running',updatedAt:now()},{merge:true});
-    return {cursor:Number(data.nextOffset)||0,pendingCursor:data.pendingCursor||'',dateCursor:Number(data.dateCursor)||0};
+    return {cursor:Number(data.nextOffset)||0,pendingCursor:data.pendingCursor||'',dateCursor:Number(data.dateCursor)||0,checkedDates:Array.isArray(data.checkedDates)?data.checkedDates:[]};
   });
   return acquired ? {ref,owner,...acquired} : null;
 }
@@ -49,18 +49,32 @@ export async function runResultAutomation(db,options={}) {
   if(!lease)return {status:'busy',updated:0};
   let summary={status:'failed',updated:0};
   let pendingCursor=lease.pendingCursor,dateCursor=lease.dateCursor;
+  let checkedDates=lease.checkedDates;
+  const started=Date.now(),deadline=started+45000;
+  const errors=[],warnings=[];let updated=0,reads=0,checks=0;
   try {
-    const pending=await (options.readPending||readPendingSignals)(db,pendingCursor);
-    const result=await (options.settle||settleSignalsFromTotalCorner)(db,pending.signals,dateCursor);
-    const settlement=result.settlement;
-    pendingCursor=pending.nextCursor;
-    dateCursor=settlement.nextCursor||0;
-    summary={...settlement,status:settlement.errors?.length?'partial':'complete',pendingChecked:pending.signals.length};
+    const maxPasses=Math.max(1,Math.min(10,Number(options.maxPasses)||1));
+    for(let pass=0;pass<maxPasses&&(pass===0||Date.now()-started<30000);pass++){
+      const pending=await (options.readPending||readPendingSignals)(db,pendingCursor);
+      const dates=[...new Set(pending.signals.map(signal=>String(signal.dateText||'').split('/').reverse().join('-')).filter(date=>/^\d{4}-\d{2}-\d{2}$/.test(date)))].sort().reverse();
+      const selected=dates.filter(date=>!checkedDates.includes(date)).slice(0,2);
+      const result=await (options.settle||settleSignalsFromTotalCorner)(db,pending.signals,dateCursor,{dates:selected,deadline});
+      const settlement=result.settlement;
+      checkedDates=[...new Set([...checkedDates,...selected])];
+      const complete=dates.every(date=>checkedDates.includes(date));
+      if(complete){pendingCursor=pending.nextCursor;checkedDates=[];}
+      dateCursor=settlement.nextCursor||0;
+      errors.push(...(settlement.errors||[]));warnings.push(...(settlement.warnings||[]));
+      updated+=settlement.updated||0;reads+=pending.signals.length;
+      checks+=settlement.pendingChecked??pending.signals.filter(signal=>selected.includes(String(signal.dateText||'').split('/').reverse().join('-'))).length;
+      summary={...settlement,status:errors.length?'partial':'complete',updated,errors:[...new Set(errors)],warnings:[...new Set(warnings)],passes:pass+1,pendingRead:reads,pendingChecked:checks,pageDatesRemaining:complete?0:dates.filter(date=>!checkedDates.includes(date)).length};
+      if(complete&&!pending.nextCursor)break;
+    }
     return summary;
   } catch(error) {
     summary.error=error.message||'Falha ao confirmar resultados.';
     throw error;
-  } finally {await finishRun(db,lease,summary,{pendingCursor,dateCursor});}
+  } finally {await finishRun(db,lease,summary,{pendingCursor,dateCursor,checkedDates});}
 }
 
 export async function runNotificationAutomation(db,options={}) {

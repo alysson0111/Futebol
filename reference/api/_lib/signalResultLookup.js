@@ -17,19 +17,19 @@ export function selectResultDates(signals, cursor = 0, today = new Date().toLoca
 }
 
 function normalize(value) {
-  return String(value || "").replace(/^(?:1[ºo]T|2[ºo]T|HT|FT)\s+(?:['’\d]\s*)*/i, '').replace(/\d{1,3}(?:\+\d{1,2})?['\u2019]\s*$/, '').normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return String(value || "").replace(/^(?:1[ºo]T|2[ºo]T|HT|FT)\s+(?:['’\d]\s*)*/i, '').replace(/^\d{1,3}(?:\+\d{1,2})?['\u2019]\s*/, '').replace(/\d{1,3}(?:\+\d{1,2})?['\u2019]\s*$/, '').normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
 export function findResultGame(signal, games) {
   const candidates = games.filter((game) => game.dateText === signal.dateText && game.market === signal.market);
-  const sameSource = candidates.filter((game) => game.sourceId === signal.sourceId);
+  const sameSource = signal.sourceId ? candidates.filter((game) => game.sourceId === signal.sourceId) : [];
   const sameTeams = candidates.filter((game) => normalize(game.home) === normalize(signal.home) && normalize(game.away) === normalize(signal.away));
   const sameLeague = sameTeams.filter(game => normalize(game.league) === normalize(signal.league));
   const kickoff = String(signal.sourceId || '').match(/-(\d{2}:\d{2})$/)?.[1];
-  const withoutCards = value => normalize(value).replace(/\s+\d+(?:\s+\d+)*$/, '');
+  const withoutCards = value => normalize(value).replace(/^(?:[1-9]\s+)+/, '').replace(/\s+\d+(?:\s+\d+)*$/, '');
   const legacyCards = candidates.filter(game => kickoff && game.time === kickoff && normalize(game.league) === normalize(signal.league)
     && withoutCards(signal.home) === withoutCards(game.home) && withoutCards(signal.away) === withoutCards(game.away));
-  const matches = sameSource.length ? sameSource : sameLeague.length ? sameLeague : sameTeams.length ? sameTeams : legacyCards;
+  const matches = sameSource.length ? [...sameSource,...sameLeague,...legacyCards] : sameLeague.length ? [...sameLeague,...legacyCards] : sameTeams.length ? sameTeams : legacyCards;
   const finals = matches.filter(isFinishedGame);
   const preferred = finals.length ? finals : matches;
   const identities = new Set(preferred.map(game => `${normalize(game.league)}|${game.time || ''}|${game.scoreText || ''}`));

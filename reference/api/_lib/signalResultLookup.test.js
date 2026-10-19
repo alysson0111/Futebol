@@ -22,6 +22,44 @@ test('legacy minutes and card counts require an unambiguous final match',()=>{
 import { analyzeFixtures } from "./scanner.js";
 import { buildFinalSignalUpdate } from "../../src/analysis/signalSettlement.js";
 
+test('minutes stuck before either team name cannot prevent exact final matching',()=>{
+  const signal={dateText:'16/10/2026',market:'handicap',league:'Liga',home:"1\u00baT 1 Casa",away:"20'UD Leiria Sub23"};
+  const final={...signal,home:'Casa',away:'UD Leiria Sub23',apiStatus:'FT',scoreText:'2x0'};
+  assert.equal(findResultGame(signal,[final]),final);
+  assert.equal(findResultGame({...signal,home:'1860 Casa'},[final]),null);
+  assert.equal(findResultGame(signal,[{...final,away:'UD Leiria',sourceId:'different'}]),null);
+});
+
+test('a stale exact source row cannot hide a confirmed final with card decorations',()=>{
+  const signal={dateText:'14/10/2026',market:'handicap',league:'Liga',home:'Radunia',away:'Jaguar',sourceId:'old-16:30'};
+  const stale={...signal,time:'16:30',apiStatus:'NS',scoreText:'0x0'};
+  const final={...signal,sourceId:'new',home:'4 Radunia',away:'Jaguar 2',time:'16:30',apiStatus:'FT',scoreText:'0x2'};
+  assert.equal(findResultGame(signal,[stale,final]),final);
+  assert.equal(findResultGame(signal,[stale,{...final,time:'17:30'}]),stale);
+});
+
+test('validated pages survive a failed next page and are reused on the following attempt',async()=>{
+  const original=globalThis.fetch,records=new Map();let calls=0;
+  const store={collection:()=>({doc:id=>({get:async()=>({exists:records.has(id),data:()=>records.get(id)}),set:async value=>records.set(id,value)})})};
+  try {
+    globalThis.fetch=async url=>{
+      calls++;
+      if(calls===2)return {ok:false,status:503};
+      return {ok:true,text:async()=>String(url).includes('/page:2')
+        ? '# Agenda\n2000-01-01\nLiga\n09:00 FT C 0 - 1 D'
+        : "# Agenda\n2000-01-01\nLiga\n08:00 FT A 2 - 1 B\n[2](/pt/match/schedule/20000101/page:2)"};
+    };
+    const first=await fetchTotalCornerDate('2000-01-01',{store});
+    assert.equal(first.length,1);assert.equal(first.coverageErrors.length,1);
+    const second=await fetchTotalCornerDate('2000-01-01',{store});
+    assert.equal(second.length,2);assert.equal(calls,3);
+    assert.equal(second.coverageErrors.length,0);
+    await fetchTotalCornerDate('2000-01-01',{store});assert.equal(calls,3);
+    assert.equal(records.size,2);
+    assert.ok([...records.values()].every(page=>page.dateIso==='2000-01-01'));
+  }finally{globalThis.fetch=original;}
+});
+
 function todayIso() {
   const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
   const values = Object.fromEntries(parts.map(part => [part.type, part.value]));

@@ -12,6 +12,14 @@ em `central_jobs/results`. Apenas placares finais confirmados e estatisticas suf
 para o mercado encerram sinais. Resultados manuais ou ja confirmados nao sao sobrescritos.
 Paginas adicionais da agenda por data tambem sao consultadas; falhas ficam no resumo.
 
+Cada lote mantem a lista das datas ja consultadas: o cursor de sinais so avanca depois
+que todas as datas daquele lote forem tentadas. A rotina faz ate seis passagens por
+execucao, respeitando o limite de tempo da Vercel. `pendingRead` conta leituras e
+`pendingChecked` conta apenas sinais de datas realmente consultadas.
+As paginas com data validada ficam em `central_result_pages`: por dois minutos para
+hoje/ontem e seis horas para datas anteriores. Paginas que falharam nao apagam as
+paginas ja obtidas; tentativas seguintes reutilizam o cache e completam a cobertura.
+
 ## Avisos de resultado no Telegram
 
 Ao encerrar um sinal cuja entrada foi enviada, a mesma transacao cria um aviso em

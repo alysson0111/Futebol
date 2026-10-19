@@ -41,6 +41,40 @@ test('results source failure releases its lease without advancing the cursor',as
   assert.equal(db.records.get('central_jobs/results').pendingCursor,'');
 });
 
+test('mixed-date pages are not advanced until every date has been attempted',async()=>{
+  const db=fakeDb(),seen=new Set();
+  const signals=Array.from({length:7},(_,index)=>({...game(),dateText:`${String(index+10).padStart(2,'0')}/10/2026`}));
+  for(let round=0;round<4;round++){
+    const result=await runResultAutomation(db,{
+      readPending:async(_db,cursor)=>{assert.equal(cursor,'');return {signals,nextCursor:'next-page'};},
+      settle:async(_db,_signals,_cursor,options)=>{assert.ok(options.dates.length<=2);options.dates.forEach(date=>{assert.equal(seen.has(date),false);seen.add(date);});return {settlement:{updated:0,errors:[],pendingChecked:options.dates.length}};}
+    });
+    assert.ok(result.pendingChecked<=2);
+    const job=db.records.get('central_jobs/results');
+    assert.equal(job.pendingCursor,round<3?'':'next-page');
+    job.lastStartedAtMs=Date.now()-300001;
+  }
+  assert.equal(seen.size,7);
+});
+
+test('settlement reports only signals whose dates were actually queried',async()=>{
+  const signals=Array.from({length:100},(_,index)=>({...game(),id:`test-${index}`,result:'pendente',dateText:index<23?'14/10/2026':'13/10/2026'}));
+  const result=await settleSignalsFromTotalCorner(fakeDb(),signals,0,{dates:['2026-10-14'],fetchGames:async()=>[]});
+  assert.equal(result.settlement.pendingChecked,23);
+  assert.equal(result.settlement.pendingDeferred,77);
+});
+
+test('warm recovery can finish several mixed-date checks within the same execution',async()=>{
+  const db=fakeDb(),seen=new Set();
+  const signals=Array.from({length:7},(_,index)=>({...game(),dateText:`${String(index+10).padStart(2,'0')}/10/2026`}));
+  const result=await runResultAutomation(db,{maxPasses:6,
+    readPending:async()=>({signals,nextCursor:''}),
+    settle:async(_db,_signals,_cursor,{dates,deadline})=>{assert.ok(deadline>Date.now());dates.forEach(date=>seen.add(date));return {settlement:{updated:0,errors:[],pendingChecked:dates.length}};}
+  });
+  assert.equal(seen.size,7);assert.equal(result.passes,4);assert.equal(result.pendingChecked,7);
+  assert.equal(result.pageDatesRemaining,0);
+});
+
 test('confirmed recovery preserves results changed concurrently and commits only pending signals',async()=>{
   const db=fakeDb();
   const pending={...game(),id:'pending',result:'pendente',telegram:{status:'enviado',messageId:123}};
